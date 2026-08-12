@@ -20,6 +20,16 @@ use tauri_plugin_autostart::MacosLauncher;
 
 type CommandResult<T> = Result<T, String>;
 
+async fn run_node_test<T, F>(operation: F) -> CommandResult<T>
+where
+    T: Send + 'static,
+    F: FnOnce() -> CommandResult<T> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(operation)
+        .await
+        .map_err(|error| format!("节点检测任务异常结束：{error}"))?
+}
+
 #[tauri::command]
 fn get_snapshot(core: State<'_, AppCore>) -> CommandResult<AppSnapshot> {
     core.snapshot()
@@ -41,13 +51,13 @@ fn export_nodes(core: State<'_, AppCore>, path: String) -> CommandResult<String>
 }
 
 #[tauri::command]
-fn test_node(core: State<'_, AppCore>, node_id: String) -> CommandResult<NodeEntry> {
-    core.test_node(&node_id)
+async fn test_node(app: tauri::AppHandle, node_id: String) -> CommandResult<NodeEntry> {
+    run_node_test(move || app.state::<AppCore>().test_node(&node_id)).await
 }
 
 #[tauri::command]
-fn test_all_nodes(core: State<'_, AppCore>) -> CommandResult<Vec<NodeEntry>> {
-    core.test_all_nodes()
+async fn test_all_nodes(app: tauri::AppHandle) -> CommandResult<Vec<NodeEntry>> {
+    run_node_test(move || app.state::<AppCore>().test_all_nodes()).await
 }
 
 #[tauri::command]
@@ -356,4 +366,20 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running GitBoost");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::run_node_test;
+
+    #[test]
+    fn node_tests_run_off_the_calling_thread() {
+        let calling_thread = std::thread::current().id();
+        let ran_in_background = tauri::async_runtime::block_on(run_node_test(move || {
+            Ok(std::thread::current().id() != calling_thread)
+        }))
+        .unwrap();
+
+        assert!(ran_in_background);
+    }
 }

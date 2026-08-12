@@ -40,4 +40,4 @@ npm run tauri -- build --target aarch64-apple-darwin
 
 数据保存在 macOS 的应用数据目录 `pro.gitboost.desktop` 下。恢复操作只删除 GitBoost 自己注册的 `include.path` 并清空自己的重写规则，不修改任何仓库的 remote。
 
-“使用日志”要求 GitBoost 正在运行。应用退出后加速配置仍然有效，但没有本地 Socket 接收 Trace2 事件，因此退出期间的 Git 操作不会补记；Socket 不可用不会阻断 Git 命令。
+“使用日志”要求 GitBoost 正在运行，只保留最近 7 天的脱敏记录。应用退出后加速配置仍然有效，但没有本地 Socket 接收 Trace2 事件，因此退出期间的 Git 操作不会补记；Socket 不可用不会阻断 Git 命令。

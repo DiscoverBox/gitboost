@@ -366,7 +366,7 @@ function UsageLogs({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: strin
         ))}
         {usage && !usage.events.length && <div className="empty-state"><strong>还没有实际连接记录</strong><p>保持 GitBoost 在后台运行，然后执行一次 git clone、git fetch 或 git pull。</p></div>}
       </section>
-      {usage && <footer className="page-footnote">日志仅保存在本机：{usage.storagePath}</footer>}
+      {usage && <footer className="page-footnote">日志仅保存在本机并自动保留最近 7 天：{usage.storagePath}</footer>}
     </div>
   );
 }

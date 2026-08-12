@@ -700,12 +700,16 @@ impl AppCore {
 
     pub fn usage_log(&self) -> Result<UsageLogSnapshot, String> {
         let settings = self.settings()?;
+        let events = {
+            let _guard = self.lock.lock();
+            load_usage_events(&self.paths.logs, 200)?
+        };
         Ok(UsageLogSnapshot {
             enabled: settings.usage_logging_enabled,
             listening: self.usage_listening.load(Ordering::Relaxed),
             configured: settings.usage_logging_enabled
                 && git::include_registered(&self.paths.gitconfig),
-            events: load_usage_events(&self.paths.logs, 200)?,
+            events,
             storage_path: self.paths.logs.join("usage.jsonl").display().to_string(),
         })
     }

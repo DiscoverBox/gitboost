@@ -1,4 +1,5 @@
 use crate::models::UsageEvent;
+use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use serde::{de::DeserializeOwned, Serialize};
 use std::{
     fs,
@@ -7,6 +8,8 @@ use std::{
     path::{Path, PathBuf},
 };
 use tempfile::NamedTempFile;
+
+const USAGE_LOG_RETENTION_DAYS: i64 = 7;
 
 pub fn ensure_dir(path: &Path) -> Result<(), String> {
     fs::create_dir_all(path)
@@ -102,29 +105,45 @@ pub fn append_log(logs_dir: &Path, level: &str, event: &str) -> Result<(), Strin
 }
 
 pub fn append_usage_event(logs_dir: &Path, event: &UsageEvent) -> Result<(), String> {
-    ensure_dir(logs_dir)?;
-    let active = logs_dir.join("usage.jsonl");
-    if fs::metadata(&active)
-        .map(|metadata| metadata.len() > 1024 * 1024)
-        .unwrap_or(false)
-    {
-        let previous = logs_dir.join("usage.jsonl.1");
-        if previous.exists() {
-            fs::remove_file(&previous).map_err(|error| format!("无法轮转使用日志：{error}"))?;
-        }
-        fs::rename(&active, &previous).map_err(|error| format!("无法轮转使用日志：{error}"))?;
-    }
-    let mut file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&active)
-        .map_err(|error| format!("无法打开使用日志：{error}"))?;
-    serde_json::to_writer(&mut file, event)
-        .map_err(|error| format!("无法写入使用日志：{error}"))?;
-    writeln!(file).map_err(|error| format!("无法写入使用日志：{error}"))
+    append_usage_event_at(logs_dir, event, Utc::now())
 }
 
 pub fn load_usage_events(logs_dir: &Path, limit: usize) -> Result<Vec<UsageEvent>, String> {
+    load_usage_events_at(logs_dir, limit, Utc::now())
+}
+
+fn append_usage_event_at(
+    logs_dir: &Path,
+    event: &UsageEvent,
+    now: DateTime<Utc>,
+) -> Result<(), String> {
+    let mut events = read_usage_events(logs_dir)?;
+    retain_recent_usage_events(&mut events, now);
+    if event.occurred_at >= usage_log_cutoff(now) {
+        events.push(event.clone());
+    }
+    persist_usage_events(logs_dir, &events)
+}
+
+fn load_usage_events_at(
+    logs_dir: &Path,
+    limit: usize,
+    now: DateTime<Utc>,
+) -> Result<Vec<UsageEvent>, String> {
+    let previous_exists = logs_dir.join("usage.jsonl.1").exists();
+    let mut events = read_usage_events(logs_dir)?;
+    let original_len = events.len();
+    retain_recent_usage_events(&mut events, now);
+    if events.len() != original_len || previous_exists {
+        persist_usage_events(logs_dir, &events)?;
+    }
+    let keep_from = events.len().saturating_sub(limit);
+    let mut recent = events.split_off(keep_from);
+    recent.reverse();
+    Ok(recent)
+}
+
+fn read_usage_events(logs_dir: &Path) -> Result<Vec<UsageEvent>, String> {
     let mut events = Vec::new();
     for path in [logs_dir.join("usage.jsonl.1"), logs_dir.join("usage.jsonl")] {
         if !path.exists() {
@@ -139,10 +158,32 @@ pub fn load_usage_events(logs_dir: &Path, limit: usize) -> Result<Vec<UsageEvent
             }
         }
     }
-    let keep_from = events.len().saturating_sub(limit);
-    let mut recent = events.split_off(keep_from);
-    recent.reverse();
-    Ok(recent)
+    Ok(events)
+}
+
+fn usage_log_cutoff(now: DateTime<Utc>) -> DateTime<Utc> {
+    now - ChronoDuration::days(USAGE_LOG_RETENTION_DAYS)
+}
+
+fn retain_recent_usage_events(events: &mut Vec<UsageEvent>, now: DateTime<Utc>) {
+    let cutoff = usage_log_cutoff(now);
+    events.retain(|event| event.occurred_at >= cutoff);
+}
+
+fn persist_usage_events(logs_dir: &Path, events: &[UsageEvent]) -> Result<(), String> {
+    ensure_dir(logs_dir)?;
+    let mut bytes = Vec::new();
+    for event in events {
+        serde_json::to_writer(&mut bytes, event)
+            .map_err(|error| format!("无法写入使用日志：{error}"))?;
+        bytes.push(b'\n');
+    }
+    atomic_write(&logs_dir.join("usage.jsonl"), &bytes)?;
+    let previous = logs_dir.join("usage.jsonl.1");
+    if previous.exists() {
+        fs::remove_file(&previous).map_err(|error| format!("无法清理过期使用日志：{error}"))?;
+    }
+    Ok(())
 }
 
 pub fn clear_logs(logs_dir: &Path) -> Result<(), String> {
@@ -174,6 +215,7 @@ pub fn clear_logs(logs_dir: &Path) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::UsageRoute;
     use serde::{Deserialize, Serialize};
 
     #[derive(Default, Serialize, Deserialize, PartialEq, Debug)]
@@ -187,5 +229,53 @@ mod tests {
         let path = directory.path().join("state.json");
         atomic_write_json(&path, &Fixture { value: 42 }).unwrap();
         assert_eq!(load_json::<Fixture>(&path).unwrap(), Fixture { value: 42 });
+    }
+
+    fn usage_event(id: &str, occurred_at: DateTime<Utc>) -> UsageEvent {
+        UsageEvent {
+            id: id.into(),
+            occurred_at,
+            command: "clone".into(),
+            repository: "https://github.com/octocat/Hello-World.git".into(),
+            route: UsageRoute::Direct,
+            node_name: None,
+            connection_host: "github.com".into(),
+            succeeded: true,
+            exit_code: 0,
+            duration_ms: 100,
+        }
+    }
+
+    #[test]
+    fn usage_logs_keep_only_the_most_recent_seven_days() {
+        let directory = tempfile::tempdir().unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-08-12T08:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        persist_usage_events(
+            directory.path(),
+            &[
+                usage_event(
+                    "expired",
+                    now - ChronoDuration::days(7) - ChronoDuration::seconds(1),
+                ),
+                usage_event("boundary", now - ChronoDuration::days(7)),
+            ],
+        )
+        .unwrap();
+
+        append_usage_event_at(directory.path(), &usage_event("recent", now), now).unwrap();
+
+        let events = load_usage_events_at(directory.path(), 200, now).unwrap();
+        assert_eq!(
+            events
+                .iter()
+                .map(|event| event.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["recent", "boundary"]
+        );
+        assert!(!fs::read_to_string(directory.path().join("usage.jsonl"))
+            .unwrap()
+            .contains("expired"));
     }
 }
