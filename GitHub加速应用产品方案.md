@@ -41,7 +41,7 @@ MVP 只做本地客户端，不建设服务器端系统：
 | 仓库中保存的 `remote.origin.url` | `https://github.com/owner/repository.git` |
 | fetch 生效地址 | `https://node.example/https://github.com/owner/repository.git` |
 | 标准 remote 的 push 生效地址 | `https://github.com/owner/repository.git` |
-| 更长的仓库级直连规则 | 能覆盖全局加速规则 |
+| 精确仓库级加速规则 | 只重写清单中匹配的仓库 |
 
 机制参考：[Git `url.<base>.insteadOf` / `pushInsteadOf` 文档](https://git-scm.com/docs/git-config#Documentation/git-config.txt-urlbaseinsteadOf)、[Git clone 文档](https://git-scm.com/docs/git-clone)、[Git Smart HTTP 协议](https://git-scm.com/docs/http-protocol)。
 
@@ -76,7 +76,7 @@ git push
 - 自动选择、固定节点、GitHub 直连三种线路状态。
 - 全局加速、仅加速清单两种路由范围。
 - 用独立 gitconfig 开启、切换和关闭加速。
-- 直连清单、加速清单管理。
+- 公开仓库加速清单管理。
 - Git 配置冲突、显式 `pushurl` 和带凭据 URL 的诊断。
 - 配置备份、幂等恢复、诊断信息导出。
 - 单元测试、集成测试和三平台端到端测试。
@@ -197,22 +197,26 @@ flowchart TD
 
 | 模式 | 行为 | 适用用户 |
 |---|---|---|
-| 全局加速 | 所有匹配 `https://github.com/` 的读取 URL 默认走节点，直连清单除外 | 确认只处理公开仓库的用户 |
+| 全局加速 | 所有匹配 `https://github.com/` 的读取 URL 都走节点，不设置仓库级例外 | 确认只处理公开仓库的用户 |
 | 仅加速清单 | 默认 GitHub 直连，只有用户加入清单的公开仓库走节点 | 使用私有仓库或不确定的用户 |
 
 首次向导询问“这台电脑是否会访问 GitHub 私有仓库”。回答“会”或“不确定”时，默认选择“仅加速清单”。
 
-### 6.2 直连规则
+### 6.2 加速清单
 
-全局模式下，用户可提前添加：
+仅加速清单模式下，用户可以输入完整 GitHub HTTPS 地址：
 
 ```text
-https://github.com/company/private-repo.git
+https://github.com/anthropics/skills.git
 ```
 
-应用生成更长的仓库级自映射规则。Git 使用最长前缀匹配，所以具体仓库规则能覆盖 `https://github.com/` 的全局规则。
+也可以输入仓库简写：
 
-注意：直连清单必须在访问私有仓库之前配置。应用不能从一个尚未执行的标准 clone 命令中自动得知仓库是否私有。
+```text
+anthropics/skills.git
+```
+
+应用统一规范化为完整 HTTPS 地址，并为每个仓库生成精确重写规则。系统不内置默认项目清单。全局模式不显示、不读取项目清单，也不提供仓库级直连例外。
 
 ### 6.3 push 边界
 
@@ -273,9 +277,9 @@ GitHub 加速                         已开启
 
 ### 7.4 路由清单
 
-- 在全局模式管理直连仓库。
 - 在仅加速清单模式管理公开加速仓库。
-- 输入时规范化 GitHub URL，并显示最终匹配范围。
+- 接受 `owner/repository` 简写或完整 GitHub HTTPS URL，规范化后显示最终匹配范围。
+- 全局模式只显示风险说明，不显示项目清单。
 - 不自动扫描磁盘；只检查用户主动选择的仓库目录。
 
 ### 7.5 环境诊断
@@ -390,7 +394,7 @@ GitBoost/
 - `settings.json`：启用状态、线路模式、路由范围、当前节点。
 - `nodes.json`：用户导入的节点。
 - `health.json`：每个节点有限的汇总结果，不保存无限历史。
-- `routes.json`：直连清单或精确加速清单。
+- `routes.json`：用户配置的精确公开仓库加速清单。
 - `gitboost.gitconfig`：Git 实际读取的规则。
 - `backups/`：仅保存应用相关配置快照。
 - `logs/`：本地轮转的脱敏日志。
@@ -424,8 +428,9 @@ GitBoost/
 - `git remote get-url origin` 指向所选节点。
 - 标准 remote 的 `git remote get-url --push origin` 指向 GitHub。
 - 切换节点不修改任何仓库保存的 remote。
-- 全局模式的直连规则能覆盖全局代理规则。
+- 全局模式只生成 GitHub 全局读取重写，不生成仓库级例外。
 - 精确模式中未加入清单的仓库保持直连。
+- `anthropics/skills.git` 等简写会规范化为完整 GitHub HTTPS 地址。
 - 关闭加速后 fetch/pull 恢复 GitHub 直连。
 
 ### 10.2 安全与可靠性
@@ -493,7 +498,7 @@ AI 可以并行生成 UI、Rust 模块和平台构建配置，但合并顺序仍
 | 仓库保存原始 origin | 通过本地 Git 隔离实验 |
 | fetch 走选中节点 | 通过本地 Git 隔离实验 |
 | 标准 remote 的 push 直连 | 通过本地 Git 隔离实验 |
-| 仓库级直连覆盖全局规则 | 通过最长前缀隔离实验 |
+| 精确模式不影响清单外仓库 | 通过仓库级前缀隔离实验 |
 | 任意节点都能通过前缀方式接入 | 不成立；MVP 明确只接受前缀型节点 |
 | 命令中途自动换节点 | 不成立；已改为切换后重试 |
 

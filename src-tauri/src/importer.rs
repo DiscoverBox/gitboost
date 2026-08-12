@@ -66,9 +66,23 @@ pub fn parse_import_text(text: &str) -> Result<Vec<NodeImportItem>, String> {
 
 pub fn normalize_repository_url(input: &str) -> Result<String, String> {
     let trimmed = input.trim();
-    let url = Url::parse(trimmed).map_err(|_| "请输入完整的 GitHub HTTPS 地址")?;
+    if trimmed.is_empty() {
+        return Err("仓库地址为空".into());
+    }
+    let expanded = if trimmed.contains("://") {
+        trimmed.to_string()
+    } else if let Some(path) = trimmed.strip_prefix("github.com/") {
+        format!("https://github.com/{path}")
+    } else {
+        format!("https://github.com/{trimmed}")
+    };
+    let url =
+        Url::parse(&expanded).map_err(|_| "请输入 owner/repository 或完整的 GitHub HTTPS 地址")?;
     if url.scheme() != "https" || url.host_str() != Some("github.com") {
         return Err("仅接受 https://github.com/ 下的仓库".into());
+    }
+    if url.port().is_some_and(|port| port != 443) {
+        return Err("GitHub 仓库地址不能指定自定义端口".into());
     }
     if !url.username().is_empty()
         || url.password().is_some()
@@ -88,6 +102,15 @@ pub fn normalize_repository_url(input: &str) -> Result<String, String> {
     let owner = segments.pop().unwrap();
     if owner.is_empty() || repository.is_empty() {
         return Err("仓库 owner 和名称不能为空".into());
+    }
+    if !owner
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || character == '-')
+        || !repository.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
+    {
+        return Err("仓库简写必须是 owner/repository 格式".into());
     }
     Ok(format!("https://github.com/{owner}/{repository}.git"))
 }
@@ -117,6 +140,20 @@ mod tests {
             normalize_repository_url("https://github.com/openai/codex/").unwrap(),
             "https://github.com/openai/codex.git"
         );
+        assert_eq!(
+            normalize_repository_url("anthropics/skills.git").unwrap(),
+            "https://github.com/anthropics/skills.git"
+        );
+        assert_eq!(
+            normalize_repository_url("anthropics/skills").unwrap(),
+            "https://github.com/anthropics/skills.git"
+        );
+        assert_eq!(
+            normalize_repository_url("github.com/anthropics/skills").unwrap(),
+            "https://github.com/anthropics/skills.git"
+        );
         assert!(normalize_repository_url("https://github.com/openai/codex/issues").is_err());
+        assert!(normalize_repository_url("git@github.com:anthropics/skills.git").is_err());
+        assert!(normalize_repository_url("other.example/anthropics/skills.git").is_err());
     }
 }

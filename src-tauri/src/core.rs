@@ -378,13 +378,7 @@ impl AppCore {
         if enabled && git::git_version().is_none() {
             return Err("未检测到系统 Git".into());
         }
-        if enabled
-            && settings.route_scope == RouteScope::Allowlist
-            && !self
-                .routes()?
-                .iter()
-                .any(|route| route.kind == RouteKind::Accelerated)
-        {
+        if enabled && settings.route_scope == RouteScope::Allowlist && self.routes()?.is_empty() {
             return Err("仅加速清单为空，请先加入至少一个公开仓库".into());
         }
         if enabled && settings.line_mode == LineMode::Direct {
@@ -459,18 +453,13 @@ impl AppCore {
     pub fn set_route_scope(&self, scope: RouteScope) -> Result<AppSnapshot, String> {
         let _guard = self.lock.lock();
         let mut settings = self.settings()?;
-        let mut routes = self.routes()?;
+        let routes = self.routes()?;
         settings.route_scope = scope;
-        for route in &mut routes {
-            route.kind = if scope == RouteScope::Global {
-                RouteKind::Direct
-            } else {
-                RouteKind::Accelerated
-            };
+        if scope == RouteScope::Allowlist && settings.acceleration_enabled && routes.is_empty() {
+            settings.acceleration_enabled = false;
         }
         let pairs = self.node_pairs()?;
         self.write_configuration(&mut settings, &pairs, &routes)?;
-        atomic_write_json(&self.paths.routes, &routes)?;
         atomic_write_json(&self.paths.settings, &settings)?;
         self.snapshot()
     }
@@ -479,23 +468,22 @@ impl AppCore {
         let normalized = normalize_repository_url(repository_url)?;
         let _guard = self.lock.lock();
         let mut routes = self.routes()?;
+        let settings = self.settings()?;
+        if settings.route_scope == RouteScope::Global {
+            return Err("全局加速无需配置项目清单".into());
+        }
         if routes
             .iter()
             .any(|route| route.repository_url == normalized)
         {
             return Err("该仓库已在清单中".into());
         }
-        let mut settings = self.settings()?;
         routes.push(RouteEntry {
             id: Uuid::new_v4().to_string(),
             repository_url: normalized,
-            kind: if settings.route_scope == RouteScope::Global {
-                RouteKind::Direct
-            } else {
-                RouteKind::Accelerated
-            },
             created_at: Utc::now(),
         });
+        let mut settings = settings;
         let pairs = self.node_pairs()?;
         self.write_configuration(&mut settings, &pairs, &routes)?;
         atomic_write_json(&self.paths.routes, &routes)?;
@@ -546,8 +534,7 @@ impl AppCore {
             let validation_url = match settings.route_scope {
                 RouteScope::Global => TEST_REPOSITORY,
                 RouteScope::Allowlist => routes
-                    .iter()
-                    .find(|route| route.kind == RouteKind::Accelerated)
+                    .first()
                     .map(|route| route.repository_url.as_str())
                     .unwrap_or(TEST_REPOSITORY),
             };
@@ -579,8 +566,7 @@ impl AppCore {
             let validation_url = match settings.route_scope {
                 RouteScope::Global => TEST_REPOSITORY,
                 RouteScope::Allowlist => routes
-                    .iter()
-                    .find(|route| route.kind == RouteKind::Accelerated)
+                    .first()
                     .map(|route| route.repository_url.as_str())
                     .unwrap_or(TEST_REPOSITORY),
             };
@@ -773,7 +759,9 @@ impl AppCore {
                 .push("发现其他 URL 重写规则。GitBoost 没有覆盖它们，请按来源逐项检查。".into());
         }
         if settings.route_scope == RouteScope::Global {
-            warnings.push("全局加速无法自动识别私有仓库；请在访问前维护直连清单。".into());
+            warnings.push(
+                "全局加速无法自动识别私有仓库；所有 GitHub HTTPS 读取都会经过当前节点。".into(),
+            );
         }
         let generated = Utc::now();
         let fetch = effective

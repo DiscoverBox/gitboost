@@ -246,17 +246,17 @@ function Routes({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: string |
   const global = snapshot.settings.routeScope === "global";
   return (
     <div className="page">
-      <PageHeader eyebrow="安全边界" title="路由清单" description={global ? "全局加速下，清单中的仓库强制直连 GitHub。" : "仅加速清单下，只有清单中的公开仓库会走外部节点。"} />
+      <PageHeader eyebrow="安全边界" title="路由清单" description={global ? "所有 GitHub HTTPS 仓库读取都会经过当前加速节点。" : "只有清单中的公开仓库会走外部节点。"} />
       <section className="scope-picker"><div><strong>路由范围</strong><p>访问私有仓库或不确定时，建议仅加速清单。</p></div><Segmented<RouteScope> value={snapshot.settings.routeScope} options={[{ value: "allowlist", label: "仅加速清单" }, { value: "global", label: "全局加速" }]} onChange={(scope) => run("route-scope", () => api.setRouteScope(scope), "路由范围已更新").catch(() => undefined)} /></section>
-      {global && <div className="notice notice--warning"><strong>全局加速需要你确认仓库为公开</strong><p>Git 无法自动判断仓库是否私有。请在访问私有仓库前把它加入下方直连清单。</p></div>}
-      <section className="section-block route-editor">
-        <div className="section-title"><div><h2>{global ? "直连仓库" : "公开加速仓库"}</h2><p>接受 github.com 的 HTTPS 仓库地址，可带或不带 .git。</p></div></div>
-        <div className="route-input"><input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://github.com/owner/repository.git" onKeyDown={(event) => { if (event.key === "Enter" && url.trim()) run("add-route", () => api.addRoute(url), "路由已加入清单").then(() => setUrl("")).catch(() => undefined); }} /><Button tone="primary" busy={busy === "add-route"} disabled={!url.trim()} onClick={() => run("add-route", () => api.addRoute(url), "路由已加入清单").then(() => setUrl("")).catch(() => undefined)}>加入清单</Button></div>
-        <div className="route-list">
-          {snapshot.routes.map((route) => <div key={route.id}><div><code>{route.repositoryUrl}</code><span>{route.kind === "direct" ? "直连" : "加速"}</span></div><Button tone="quiet" onClick={() => run("delete-route", () => api.deleteRoute(route.id), "路由已删除").catch(() => undefined)}>删除</Button></div>)}
-          {!snapshot.routes.length && <div className="empty-state compact"><strong>清单为空</strong><p>{global ? "所有匹配的 GitHub HTTPS 读取默认走节点。" : "所有 GitHub 仓库目前保持直连。"}</p></div>}
-        </div>
-      </section>
+      {global ? <div className="notice notice--warning"><strong>全局加速不会使用项目清单</strong><p>Git 无法自动区分公开和私有仓库，所有 GitHub HTTPS 读取都会经过当前节点。</p></div> :
+        <section className="section-block route-editor">
+          <div className="section-title"><div><h2>公开加速仓库</h2><p>输入 owner/repository，或完整的 GitHub HTTPS 地址；可带或不带 .git。</p></div></div>
+          <div className="route-input"><input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="anthropics/skills.git" aria-label="GitHub 仓库" onKeyDown={(event) => { if (event.key === "Enter" && url.trim()) run("add-route", () => api.addRoute(url), "路由已加入清单").then(() => setUrl("")).catch(() => undefined); }} /><Button tone="primary" busy={busy === "add-route"} disabled={!url.trim()} onClick={() => run("add-route", () => api.addRoute(url), "路由已加入清单").then(() => setUrl("")).catch(() => undefined)}>加入清单</Button></div>
+          <div className="route-list">
+            {snapshot.routes.map((route) => <div key={route.id}><div><code>{route.repositoryUrl}</code><span>加速</span></div><Button tone="quiet" onClick={() => run("delete-route", () => api.deleteRoute(route.id), "路由已删除").catch(() => undefined)}>删除</Button></div>)}
+            {!snapshot.routes.length && <div className="empty-state compact"><strong>清单为空</strong><p>添加需要加速的公开仓库后即可启用。</p></div>}
+          </div>
+        </section>}
     </div>
   );
 }

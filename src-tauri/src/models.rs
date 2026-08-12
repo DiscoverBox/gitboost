@@ -133,15 +133,7 @@ pub struct NodeEntry {
 pub struct RouteEntry {
     pub id: String,
     pub repository_url: String,
-    pub kind: RouteKind,
     pub created_at: DateTime<Utc>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum RouteKind {
-    Accelerated,
-    Direct,
 }
 
 #[derive(Debug, Clone, Serialize)]

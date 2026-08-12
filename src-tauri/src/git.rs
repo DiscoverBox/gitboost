@@ -1,6 +1,6 @@
 use crate::models::{
-    HealthSummary, LineMode, NodeDefinition, NodeStatus, RouteEntry, RouteKind, RouteScope,
-    Settings, TEST_REPOSITORY,
+    HealthSummary, LineMode, NodeDefinition, NodeStatus, RouteEntry, RouteScope, Settings,
+    TEST_REPOSITORY,
 };
 use chrono::Utc;
 use std::{
@@ -206,22 +206,9 @@ pub fn build_config(
             output.push_str(&format!(
                 "[url \"{base}\"]\n\tinsteadOf = https://github.com/\n\n"
             ));
-            for route in routes
-                .iter()
-                .filter(|route| route.kind == RouteKind::Direct)
-            {
-                let repository = escape_subsection(&route.repository_url);
-                output.push_str(&format!(
-                    "[url \"{repository}\"]\n\tinsteadOf = {}\n\n",
-                    route.repository_url
-                ));
-            }
         }
         RouteScope::Allowlist => {
-            for route in routes
-                .iter()
-                .filter(|route| route.kind == RouteKind::Accelerated)
-            {
+            for route in routes {
                 let suffix = route
                     .repository_url
                     .strip_prefix("https://github.com/")
@@ -524,7 +511,6 @@ mod tests {
         let routes = vec![RouteEntry {
             id: "1".into(),
             repository_url: "https://github.com/openai/codex.git".into(),
-            kind: RouteKind::Accelerated,
             created_at: Utc::now(),
         }];
         let config = build_config(&settings, Some(&node()), &routes, None).unwrap();
@@ -540,6 +526,21 @@ mod tests {
         settings.line_mode = LineMode::Direct;
         settings.usage_logging_enabled = false;
         assert_eq!(build_config(&settings, Some(&node()), &[], None).unwrap(), "# Managed by GitBoost. Do not store credentials in this file.\n# Acceleration is disabled; GitHub remains direct.\n");
+    }
+
+    #[test]
+    fn global_mode_ignores_repository_routes() {
+        let mut settings = Settings::default();
+        settings.acceleration_enabled = true;
+        settings.route_scope = RouteScope::Global;
+        let routes = vec![RouteEntry {
+            id: "1".into(),
+            repository_url: "https://github.com/openai/codex.git".into(),
+            created_at: Utc::now(),
+        }];
+        let config = build_config(&settings, Some(&node()), &routes, None).unwrap();
+        assert!(config.contains("insteadOf = https://github.com/"));
+        assert!(!config.contains("openai/codex.git"));
     }
 
     #[test]

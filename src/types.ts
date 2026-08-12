@@ -39,7 +39,6 @@ export interface NodeEntry {
 export interface RouteEntry {
   id: string;
   repositoryUrl: string;
-  kind: "accelerated" | "direct";
   createdAt: string;
 }
 
