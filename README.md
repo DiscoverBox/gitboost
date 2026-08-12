@@ -11,6 +11,7 @@ GitBoost 是一个 macOS 桌面工具：用户继续使用原始 `https://github
 - 粘贴 / JSON 导入、规范化、去重、凭据与查询参数拒绝。
 - 隔离的 `git ls-remote` 双次检测、失败分类、有限健康历史与自动选路。
 - 全局加速 / 仅加速清单、公开仓库清单、固定节点与直连模式。
+- GitHub Release 文件地址校验、节点小流量探测和浏览器下载。
 - 独立 `gitboost.gitconfig`、候选配置验证、原子替换、精确 include 注册与恢复。
 - Git 冲突、有效 fetch/push 地址、显式 `pushurl` 的脱敏诊断。
 - 基于 Git Trace2 Unix Socket 的实际连接日志，区分 FastGit、GitHub 直连和其他重写；不落盘原始参数或凭据。

@@ -174,6 +174,15 @@ pub struct ImportResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DownloadTarget {
+    pub original_url: String,
+    pub accelerated_url: String,
+    pub file_name: String,
+    pub node_name: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiagnosticReport {
     pub generated_at: DateTime<Utc>,
     pub git_path: Option<String>,

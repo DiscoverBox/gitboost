@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSnapshot, DiagnosticReport, ImportResult, NodeEntry, RouteScope, LineMode, UsageLogSnapshot } from "./types";
+import type { AppSnapshot, DiagnosticReport, DownloadTarget, ImportResult, NodeEntry, RouteScope, LineMode, UsageLogSnapshot } from "./types";
 
 const browserMock: AppSnapshot = {
   settings: {
@@ -87,4 +87,6 @@ export const api = {
   clearLogs: () => call<AppSnapshot>("clear_logs"),
   getUsageLog: () => inTauri() ? call<UsageLogSnapshot>("get_usage_log") : Promise.resolve(structuredClone(browserUsageMock)),
   setUsageLogging: (enabled: boolean) => call<AppSnapshot>("set_usage_logging", { enabled }),
+  prepareDownload: (originalUrl: string) => call<DownloadTarget>("prepare_download", { originalUrl }),
+  openDownload: (originalUrl: string) => call<DownloadTarget>("open_download", { originalUrl }),
 };

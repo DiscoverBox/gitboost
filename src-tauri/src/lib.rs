@@ -1,4 +1,5 @@
 mod core;
+mod downloads;
 mod git;
 mod importer;
 mod models;
@@ -141,6 +142,25 @@ fn get_usage_log(core: State<'_, AppCore>) -> CommandResult<UsageLogSnapshot> {
 #[tauri::command]
 fn set_usage_logging(core: State<'_, AppCore>, enabled: bool) -> CommandResult<AppSnapshot> {
     core.set_usage_logging(enabled)
+}
+
+#[tauri::command]
+fn prepare_download(
+    core: State<'_, AppCore>,
+    original_url: String,
+) -> CommandResult<DownloadTarget> {
+    core.prepare_download(&original_url)
+}
+
+#[tauri::command]
+async fn open_download(
+    core: State<'_, AppCore>,
+    original_url: String,
+) -> CommandResult<DownloadTarget> {
+    let target = core.prepare_download(&original_url)?;
+    tauri::async_runtime::spawn_blocking(move || downloads::probe_and_open(target))
+        .await
+        .map_err(|error| format!("下载探测任务异常结束：{error}"))?
 }
 
 fn reveal_main(app: &tauri::AppHandle) {
@@ -331,6 +351,8 @@ pub fn run() {
             clear_logs,
             get_usage_log,
             set_usage_logging,
+            prepare_download,
+            open_download,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GitBoost");

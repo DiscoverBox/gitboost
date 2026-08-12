@@ -1,5 +1,5 @@
 use crate::{
-    git,
+    downloads, git,
     importer::{
         default_node_name, normalize_repository_url, normalize_rewrite_base, parse_import_text,
     },
@@ -133,6 +133,27 @@ impl AppCore {
                 conflicts,
             },
         })
+    }
+
+    pub fn prepare_download(&self, original_url: &str) -> Result<DownloadTarget, String> {
+        let settings = self.settings()?;
+        let pairs = self.node_pairs()?;
+        let current = settings.current_node_id.as_deref().and_then(|id| {
+            pairs
+                .iter()
+                .find(|(node, _)| node.id == id && node.enabled)
+                .map(|(node, _)| node)
+        });
+        let node = current
+            .or_else(|| git::choose_node(&pairs))
+            .or_else(|| {
+                pairs
+                    .iter()
+                    .find(|(node, _)| node.enabled)
+                    .map(|(node, _)| node)
+            })
+            .ok_or_else(|| "没有已启用的下载节点".to_string())?;
+        downloads::prepare_target(original_url, node)
     }
 
     fn node_entries(&self) -> Result<Vec<NodeEntry>, String> {
@@ -858,6 +879,22 @@ mod tests {
         assert!(settings.current_node_id.is_none());
         settings.acceleration_enabled = true;
         assert!(core.select_current(&mut settings, &pairs).is_err());
+    }
+
+    #[test]
+    fn prepares_download_with_an_enabled_unverified_node() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let target = core
+            .prepare_download(
+                "https://github.com/ollama/ollama/releases/download/v1/OllamaSetup.exe",
+            )
+            .unwrap();
+        assert_eq!(target.node_name, "FastGit");
+        assert_eq!(
+            target.accelerated_url,
+            "https://fastgit.cc/https://github.com/ollama/ollama/releases/download/v1/OllamaSetup.exe"
+        );
     }
 
     #[test]

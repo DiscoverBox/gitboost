@@ -3,13 +3,14 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
 import { api, getSnapshot } from "./api";
-import type { AppSnapshot, DiagnosticReport, LineMode, NodeEntry, PageKey, RouteScope, UsageLogSnapshot } from "./types";
+import type { AppSnapshot, DiagnosticReport, DownloadTarget, LineMode, NodeEntry, PageKey, RouteScope, UsageLogSnapshot } from "./types";
 import { currentNode, formatLatency, formatRelativeTime, statusLabel, statusTone, successRate } from "./utils";
 
 const navItems: { key: PageKey; label: string }[] = [
   { key: "overview", label: "总览" },
   { key: "nodes", label: "节点" },
   { key: "routes", label: "路由清单" },
+  { key: "downloads", label: "文件下载" },
   { key: "usage", label: "使用日志" },
   { key: "diagnostics", label: "环境诊断" },
   { key: "settings", label: "设置" },
@@ -142,6 +143,7 @@ export default function App() {
         {page === "overview" && <Overview snapshot={snapshot} busy={busy} run={run} go={setPage} />}
         {page === "nodes" && <Nodes snapshot={snapshot} busy={busy} run={run} onImport={() => setImportOpen(true)} />}
         {page === "routes" && <Routes snapshot={snapshot} busy={busy} run={run} />}
+        {page === "downloads" && <Downloads busy={busy} run={run} />}
         {page === "usage" && <UsageLogs snapshot={snapshot} busy={busy} run={run} />}
         {page === "diagnostics" && <Diagnostics snapshot={snapshot} busy={busy} />}
         {page === "settings" && <Settings snapshot={snapshot} busy={busy} run={run} />}
@@ -257,6 +259,42 @@ function Routes({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: string |
             {!snapshot.routes.length && <div className="empty-state compact"><strong>清单为空</strong><p>添加需要加速的公开仓库后即可启用。</p></div>}
           </div>
         </section>}
+    </div>
+  );
+}
+
+function Downloads({ busy, run }: { busy: string | null; run: Runner }) {
+  const [url, setUrl] = useState("");
+  const [target, setTarget] = useState<DownloadTarget | null>(null);
+  const prepare = async () => {
+    const next = await run("download-prepare", () => api.prepareDownload(url));
+    await navigator.clipboard.writeText(next.acceleratedUrl);
+    setTarget(next);
+  };
+  const download = async () => {
+    const next = await run("download-open", () => api.openDownload(url), "已通过节点在浏览器中打开下载");
+    setTarget(next);
+  };
+  const changeUrl = (value: string) => {
+    setUrl(value);
+    setTarget(null);
+  };
+  return (
+    <div className="page">
+      <PageHeader eyebrow="Release 文件" title="文件下载" description="粘贴公开 GitHub Release 文件地址；GitBoost 会先通过当前节点做小流量探测，再交给默认浏览器下载。" />
+      <section className="download-card">
+        <label htmlFor="download-url">GitHub 文件地址</label>
+        <div className="download-input">
+          <input id="download-url" value={url} onChange={(event) => changeUrl(event.target.value)} placeholder="https://github.com/owner/repo/releases/download/v1.0/file.zip" spellCheck={false} onKeyDown={(event) => { if (event.key === "Enter" && url.trim()) download().catch(() => undefined); }} />
+          <Button tone="primary" busy={busy === "download-open"} disabled={!url.trim()} onClick={() => download().catch(() => undefined)}>开始下载</Button>
+        </div>
+        <p>只检查地址格式，不会直连 GitHub 验证文件；实际可用性由当前节点探测。</p>
+      </section>
+      <section className="section-block">
+        <div className="section-title"><div><h2>下载线路</h2><p>下载操作独立于 Git 路由清单。节点失败时不会静默改为 GitHub 直连。</p></div><Button busy={busy === "download-prepare"} disabled={!url.trim()} onClick={() => prepare().catch(() => undefined)}>复制加速地址</Button></div>
+        {target ? <dl className="download-target"><div><dt>文件</dt><dd>{target.fileName}</dd></div><div><dt>节点</dt><dd>{target.nodeName}</dd></div><div><dt>加速地址</dt><dd><code>{target.acceleratedUrl}</code></dd></div></dl> : <div className="empty-state compact"><strong>等待下载地址</strong><p>支持 releases/download 和 releases/latest/download。</p></div>}
+      </section>
+      <footer className="page-footnote">第三方节点可以看到公开仓库路径和文件名。GitBoost 不支持带凭据、Token、查询参数或片段的地址。</footer>
     </div>
   );
 }
