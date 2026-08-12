@@ -1,0 +1,174 @@
+use crate::core::AppCore;
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
+use std::{
+    collections::HashMap,
+    fs,
+    os::unix::{fs::PermissionsExt, net::UnixDatagram},
+    time::Duration,
+};
+use tauri::{AppHandle, Manager};
+
+#[derive(Debug)]
+pub struct CompletedTrace {
+    pub occurred_at: DateTime<Utc>,
+    pub command: String,
+    pub original_url: Option<String>,
+    pub effective_url: String,
+    pub exit_code: i32,
+    pub duration_ms: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct TraceEnvelope {
+    event: String,
+    sid: String,
+    time: Option<DateTime<Utc>>,
+    argv: Option<Vec<String>>,
+    name: Option<String>,
+    child_class: Option<String>,
+    code: Option<i32>,
+    t_abs: Option<f64>,
+}
+
+#[derive(Debug)]
+struct PendingTrace {
+    occurred_at: DateTime<Utc>,
+    command: String,
+    original_url: Option<String>,
+    effective_url: Option<String>,
+}
+
+#[derive(Default)]
+struct TraceAssembler {
+    pending: HashMap<String, PendingTrace>,
+}
+
+impl TraceAssembler {
+    fn ingest(&mut self, bytes: &[u8]) -> Option<CompletedTrace> {
+        let event: TraceEnvelope = serde_json::from_slice(bytes).ok()?;
+        let root = event.sid.split('/').next()?.to_string();
+        let is_root = root == event.sid;
+        match event.event.as_str() {
+            "start" if is_root => {
+                let argv = event.argv.unwrap_or_default();
+                let original_url = argv.iter().find(|arg| looks_like_https(arg)).cloned();
+                self.pending.insert(
+                    root,
+                    PendingTrace {
+                        occurred_at: event.time.unwrap_or_else(Utc::now),
+                        command: command_from_argv(&argv),
+                        original_url,
+                        effective_url: None,
+                    },
+                );
+            }
+            "cmd_name" if is_root => {
+                if let (Some(pending), Some(name)) = (self.pending.get_mut(&root), event.name) {
+                    pending.command = name;
+                }
+            }
+            "child_start" if event.child_class.as_deref() == Some("remote-https") => {
+                if let (Some(pending), Some(argv)) = (self.pending.get_mut(&root), event.argv) {
+                    pending.effective_url =
+                        argv.into_iter().rev().find(|arg| looks_like_https(arg));
+                }
+            }
+            "exit" if is_root => {
+                let pending = self.pending.remove(&root)?;
+                let effective_url = pending.effective_url?;
+                return Some(CompletedTrace {
+                    occurred_at: pending.occurred_at,
+                    command: pending.command,
+                    original_url: pending.original_url,
+                    effective_url,
+                    exit_code: event.code.unwrap_or(-1),
+                    duration_ms: (event.t_abs.unwrap_or_default() * 1000.0).round() as u64,
+                });
+            }
+            _ => {}
+        }
+        None
+    }
+}
+
+fn looks_like_https(value: &str) -> bool {
+    value.starts_with("https://")
+}
+
+fn command_from_argv(argv: &[String]) -> String {
+    argv.iter()
+        .skip(1)
+        .find(|arg| !arg.starts_with('-'))
+        .cloned()
+        .unwrap_or_else(|| "git".into())
+}
+
+pub fn start_listener(app: AppHandle) {
+    std::thread::spawn(move || {
+        let socket_path = app.state::<AppCore>().trace_socket_path();
+        if socket_path.exists() {
+            let _ = fs::remove_file(&socket_path);
+        }
+        let socket = match UnixDatagram::bind(&socket_path) {
+            Ok(socket) => socket,
+            Err(error) => {
+                app.state::<AppCore>()
+                    .usage_listener_failed(&format!("Trace2 socket bind failed: {error}"));
+                return;
+            }
+        };
+        let _ = fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600));
+        let _ = socket.set_read_timeout(Some(Duration::from_secs(1)));
+        app.state::<AppCore>().set_usage_listening(true);
+        let mut assembler = TraceAssembler::default();
+        let mut buffer = vec![0_u8; 64 * 1024];
+        loop {
+            match socket.recv(&mut buffer) {
+                Ok(size) => {
+                    for line in buffer[..size].split(|byte| *byte == b'\n') {
+                        if line.is_empty() {
+                            continue;
+                        }
+                        if let Some(completed) = assembler.ingest(line) {
+                            let _ = app.state::<AppCore>().record_usage(completed);
+                        }
+                    }
+                }
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
+                Err(error) => {
+                    app.state::<AppCore>()
+                        .usage_listener_failed(&format!("Trace2 socket receive failed: {error}"));
+                    break;
+                }
+            }
+        }
+        app.state::<AppCore>().set_usage_listening(false);
+        let _ = fs::remove_file(&socket_path);
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assembles_remote_operation_without_retaining_raw_argv() {
+        let mut assembler = TraceAssembler::default();
+        assert!(assembler.ingest(br#"{"event":"start","sid":"root","time":"2026-08-12T07:22:37Z","argv":["git","clone","https://github.com/octocat/Hello-World.git"]}"#).is_none());
+        assert!(assembler.ingest(br#"{"event":"child_start","sid":"root/child","child_class":"remote-https","argv":["git","remote-https","https://github.com/octocat/Hello-World.git","https://fastgit.cc/https://github.com/octocat/Hello-World.git"]}"#).is_none());
+        let event = assembler
+            .ingest(br#"{"event":"exit","sid":"root","code":0,"t_abs":1.234}"#)
+            .unwrap();
+        assert_eq!(event.command, "clone");
+        assert_eq!(
+            event.effective_url,
+            "https://fastgit.cc/https://github.com/octocat/Hello-World.git"
+        );
+        assert_eq!(event.duration_ms, 1234);
+    }
+}

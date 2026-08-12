@@ -1,0 +1,35 @@
+[package]
+name = "gitboost"
+version = "0.1.0"
+description = "A local GitHub HTTPS read accelerator for macOS"
+authors = ["GitBoost"]
+edition = "2021"
+
+[lib]
+name = "gitboost_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[[bin]]
+name = "GitBoost"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2.4", features = [] }
+
+[dependencies]
+chrono = { version = "0.4", features = ["serde"] }
+parking_lot = "0.12"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tauri = { version = "2.8", features = ["tray-icon"] }
+tauri-plugin-autostart = "2.5"
+tauri-plugin-dialog = "2.4"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["time"] }
+url = "2"
+uuid = { version = "1", features = ["v4", "serde"] }
+wait-timeout = "0.2"
+
+[dev-dependencies]
+pretty_assertions = "1"
