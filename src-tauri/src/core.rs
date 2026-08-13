@@ -115,6 +115,10 @@ impl AppCore {
         let _ = append_log(&self.paths.logs, "ERROR", message);
     }
 
+    pub fn usage_connection_failed(&self, message: &str) {
+        let _ = append_log(&self.paths.logs, "ERROR", message);
+    }
+
     pub fn snapshot(&self) -> Result<AppSnapshot, String> {
         let settings = self.settings()?;
         let nodes = self.node_entries()?;

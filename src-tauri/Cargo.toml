@@ -1,7 +1,7 @@
 [package]
 name = "gitboost"
 version = "0.1.0"
-description = "A local GitHub HTTPS read accelerator for macOS"
+description = "A local GitHub HTTPS read accelerator for macOS and Windows"
 authors = ["GitBoost"]
 edition = "2021"
 
@@ -21,6 +21,7 @@ chrono = { version = "0.4", features = ["serde"] }
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+socket2 = "0.6"
 tauri = { version = "2.8", features = ["tray-icon"] }
 tauri-plugin-autostart = "2.5"
 tauri-plugin-dialog = "2.4"

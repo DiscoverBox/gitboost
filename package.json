@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:ui": "playwright test",
+    "build:windows": "tauri build --target x86_64-pc-windows-msvc",
     "tauri": "tauri"
   },
   "dependencies": {

@@ -2,8 +2,21 @@ use crate::models::{DownloadTarget, NodeDefinition};
 use std::process::Command;
 use url::Url;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 const PROBE_TIMEOUT_SECONDS: &str = "8";
 const PROBE_MAX_BYTES: &str = "65536";
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(target_os = "windows")]
+fn hide_console(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_console(_command: &mut Command) {}
 
 pub fn prepare_target(original_url: &str, node: &NodeDefinition) -> Result<DownloadTarget, String> {
     let (original_url, file_name) = normalize_release_url(original_url)?;
@@ -20,14 +33,36 @@ pub fn prepare_target(original_url: &str, node: &NodeDefinition) -> Result<Downl
 
 pub fn probe_and_open(target: DownloadTarget) -> Result<DownloadTarget, String> {
     probe(&target)?;
-    let status = Command::new("open")
-        .arg(&target.accelerated_url)
+    let mut command = browser_command(&target.accelerated_url);
+    hide_console(&mut command);
+    let status = command
         .status()
         .map_err(|error| format!("无法调用默认浏览器：{error}"))?;
     if !status.success() {
         return Err("默认浏览器未能打开下载地址".into());
     }
     Ok(target)
+}
+
+#[cfg(target_os = "macos")]
+fn browser_command(url: &str) -> Command {
+    let mut command = Command::new("open");
+    command.arg(url);
+    command
+}
+
+#[cfg(target_os = "windows")]
+fn browser_command(url: &str) -> Command {
+    let mut command = Command::new("rundll32.exe");
+    command.args(["url.dll,FileProtocolHandler", url]);
+    command
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn browser_command(url: &str) -> Command {
+    let mut command = Command::new("xdg-open");
+    command.arg(url);
+    command
 }
 
 fn normalize_release_url(input: &str) -> Result<(String, String), String> {
@@ -88,30 +123,32 @@ fn valid_repository(value: &str) -> bool {
 }
 
 fn probe(target: &DownloadTarget) -> Result<(), String> {
-    let output = Command::new("curl")
-        .args([
-            "--location",
-            "--silent",
-            "--show-error",
-            "--fail",
-            "--proto",
-            "=https",
-            "--proto-redir",
-            "=https",
-            "--range",
-            "0-0",
-            "--max-filesize",
-            PROBE_MAX_BYTES,
-            "--connect-timeout",
-            "4",
-            "--max-time",
-            PROBE_TIMEOUT_SECONDS,
-            "--output",
-            "/dev/null",
-            "--write-out",
-            "%{http_code}\t%{content_type}",
-            &target.accelerated_url,
-        ])
+    let mut command = Command::new("curl");
+    command.args([
+        "--location",
+        "--silent",
+        "--show-error",
+        "--fail",
+        "--proto",
+        "=https",
+        "--proto-redir",
+        "=https",
+        "--range",
+        "0-0",
+        "--max-filesize",
+        PROBE_MAX_BYTES,
+        "--connect-timeout",
+        "4",
+        "--max-time",
+        PROBE_TIMEOUT_SECONDS,
+        "--output",
+        null_device(),
+        "--write-out",
+        "%{http_code}\t%{content_type}",
+        &target.accelerated_url,
+    ]);
+    hide_console(&mut command);
+    let output = command
         .output()
         .map_err(|error| format!("无法运行下载探测：{error}"))?;
     let summary = String::from_utf8_lossy(&output.stdout);
@@ -147,6 +184,16 @@ fn probe(target: &DownloadTarget) -> Result<(), String> {
             target.node_name
         ))
     }
+}
+
+#[cfg(target_os = "windows")]
+fn null_device() -> &'static str {
+    "NUL"
+}
+
+#[cfg(not(target_os = "windows"))]
+fn null_device() -> &'static str {
+    "/dev/null"
 }
 
 fn classify_probe(

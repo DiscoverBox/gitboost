@@ -16,6 +16,7 @@ use tauri::{
     tray::TrayIconBuilder,
     Emitter, Manager, State,
 };
+#[cfg(target_os = "macos")]
 use tauri_plugin_autostart::MacosLauncher;
 
 type CommandResult<T> = Result<T, String>;
@@ -310,13 +311,13 @@ fn start_health_monitor(app: tauri::AppHandle) {
 }
 
 pub fn run() {
+    let autostart = tauri_plugin_autostart::Builder::new();
+    #[cfg(target_os = "macos")]
+    let autostart = autostart.macos_launcher(MacosLauncher::LaunchAgent);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .plugin(
-            tauri_plugin_autostart::Builder::new()
-                .macos_launcher(MacosLauncher::LaunchAgent)
-                .build(),
-        )
+        .plugin(autostart.build())
         .setup(|app| {
             let data_dir: PathBuf = app
                 .path()

@@ -12,8 +12,13 @@ use std::{
 use url::Url;
 use wait_timeout::ChildExt;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 const COMMAND_TIMEOUT: Duration = Duration::from_secs(18);
 const SLOW_THRESHOLD_MS: u64 = 2_500;
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 pub fn git_version() -> Option<String> {
     run_git(["--version"], None, Duration::from_secs(5))
@@ -27,17 +32,38 @@ pub fn git_version() -> Option<String> {
 }
 
 pub fn git_path() -> Option<String> {
-    Command::new("which")
-        .arg("git")
-        .output()
-        .ok()
-        .and_then(|output| {
-            output
-                .status
-                .success()
-                .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
+    let mut command = Command::new(git_locator());
+    command.arg("git");
+    hide_console(&mut command);
+    command.output().ok().and_then(|output| {
+        output.status.success().then(|| {
+            String::from_utf8_lossy(&output.stdout)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .trim()
+                .to_owned()
         })
+    })
 }
+
+#[cfg(target_os = "windows")]
+fn git_locator() -> &'static str {
+    "where.exe"
+}
+
+#[cfg(not(target_os = "windows"))]
+fn git_locator() -> &'static str {
+    "which"
+}
+
+#[cfg(target_os = "windows")]
+fn hide_console(command: &mut Command) {
+    command.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_console(_command: &mut Command) {}
 
 pub fn test_node(node: &NodeDefinition, previous: &HealthSummary) -> HealthSummary {
     let mut next = previous.clone();
@@ -188,7 +214,7 @@ pub fn build_config(
         String::from("# Managed by GitBoost. Do not store credentials in this file.\n");
     if settings.usage_logging_enabled {
         if let Some(socket) = trace_socket {
-            let target = format!("af_unix:dgram:{}", socket.display());
+            let target = format!("af_unix:stream:{}", socket.display());
             output.push_str(&format!(
                 "[trace2]\n\teventTarget = \"{}\"\n\n",
                 escape_subsection(&target)
@@ -461,6 +487,7 @@ fn run_git<const N: usize>(
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    hide_console(&mut command);
     if let Some(directory) = current_dir {
         command.current_dir(directory);
     }
@@ -517,6 +544,18 @@ mod tests {
         assert!(config.contains("https://fastgit.cc/https://github.com/openai/codex.git"));
         assert!(!config.contains("[url \"https://fastgit.cc/https://github.com/\"]"));
         assert!(config.contains("pushInsteadOf = https://github.com/"));
+    }
+
+    #[test]
+    fn configures_trace2_with_a_cross_platform_stream_socket() {
+        let config = build_config(
+            &Settings::default(),
+            None,
+            &[],
+            Some(Path::new("/tmp/gitboost-trace.sock")),
+        )
+        .unwrap();
+        assert!(config.contains("eventTarget = \"af_unix:stream:/tmp/gitboost-trace.sock\""));
     }
 
     #[test]

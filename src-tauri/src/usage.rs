@@ -1,13 +1,17 @@
 use crate::core::AppCore;
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
+use socket2::{Domain, SockAddr, Socket, Type};
 use std::{
     collections::HashMap,
     fs,
-    os::unix::{fs::PermissionsExt, net::UnixDatagram},
-    time::Duration,
+    io::{BufRead, BufReader},
+    path::Path,
 };
 use tauri::{AppHandle, Manager};
+
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 
 #[derive(Debug)]
 pub struct CompletedTrace {
@@ -104,46 +108,53 @@ fn command_from_argv(argv: &[String]) -> String {
         .unwrap_or_else(|| "git".into())
 }
 
+fn bind_listener(path: &Path) -> std::io::Result<Socket> {
+    let listener = Socket::new(Domain::UNIX, Type::STREAM, None)?;
+    listener.bind(&SockAddr::unix(path)?)?;
+    listener.listen(128)?;
+    Ok(listener)
+}
+
 pub fn start_listener(app: AppHandle) {
     std::thread::spawn(move || {
         let socket_path = app.state::<AppCore>().trace_socket_path();
         if socket_path.exists() {
             let _ = fs::remove_file(&socket_path);
         }
-        let socket = match UnixDatagram::bind(&socket_path) {
-            Ok(socket) => socket,
+        let listener = match bind_listener(&socket_path) {
+            Ok(listener) => listener,
             Err(error) => {
                 app.state::<AppCore>()
                     .usage_listener_failed(&format!("Trace2 socket bind failed: {error}"));
                 return;
             }
         };
+        #[cfg(unix)]
         let _ = fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600));
-        let _ = socket.set_read_timeout(Some(Duration::from_secs(1)));
         app.state::<AppCore>().set_usage_listening(true);
         let mut assembler = TraceAssembler::default();
-        let mut buffer = vec![0_u8; 64 * 1024];
         loop {
-            match socket.recv(&mut buffer) {
-                Ok(size) => {
-                    for line in buffer[..size].split(|byte| *byte == b'\n') {
-                        if line.is_empty() {
-                            continue;
-                        }
-                        if let Some(completed) = assembler.ingest(line) {
+            let (stream, _) = match listener.accept() {
+                Ok(connection) => connection,
+                Err(error) => {
+                    app.state::<AppCore>()
+                        .usage_listener_failed(&format!("Trace2 socket accept failed: {error}"));
+                    break;
+                }
+            };
+            for line in BufReader::new(stream).split(b'\n') {
+                match line {
+                    Ok(line) if !line.is_empty() => {
+                        if let Some(completed) = assembler.ingest(&line) {
                             let _ = app.state::<AppCore>().record_usage(completed);
                         }
                     }
-                }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) => {}
-                Err(error) => {
-                    app.state::<AppCore>()
-                        .usage_listener_failed(&format!("Trace2 socket receive failed: {error}"));
-                    break;
+                    Ok(_) => {}
+                    Err(error) => {
+                        let _ = app.state::<AppCore>().usage_connection_failed(&format!(
+                            "Trace2 socket read failed: {error}"
+                        ));
+                    }
                 }
             }
         }

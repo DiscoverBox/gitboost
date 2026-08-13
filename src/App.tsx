@@ -15,6 +15,7 @@ const navItems: { key: PageKey; label: string }[] = [
   { key: "diagnostics", label: "环境诊断" },
   { key: "settings", label: "设置" },
 ];
+const usesNativeTitleBar = navigator.userAgent.includes("Windows");
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -124,8 +125,8 @@ export default function App() {
 
   const selected = currentNode(snapshot.nodes, snapshot.settings.currentNodeId);
   return (
-    <div className="app-shell">
-      <div className="window-drag" data-tauri-drag-region />
+    <div className={`app-shell ${usesNativeTitleBar ? "app-shell--native-titlebar" : ""}`}>
+      {!usesNativeTitleBar && <div className="window-drag" data-tauri-drag-region />}
       <aside className="sidebar">
         <div className="brand-block">
           <div className="wordmark">GitBoost</div>
@@ -177,7 +178,7 @@ function Overview({ snapshot, busy, run, go }: { snapshot: AppSnapshot; busy: st
         </dl>
       </section>
 
-      {!snapshot.environment.gitAvailable && <div className="notice notice--danger"><strong>未检测到系统 Git</strong><p>安装 Xcode Command Line Tools 或 Git 后再开启加速。</p></div>}
+      {!snapshot.environment.gitAvailable && <div className="notice notice--danger"><strong>未检测到系统 Git</strong><p>请先安装 Git（Windows 推荐 Git for Windows），然后再开启加速。</p></div>}
       {snapshot.environment.conflicts > 0 && <div className="notice notice--warning"><strong>发现 {snapshot.environment.conflicts} 条 URL 重写冲突</strong><p>GitBoost 不会覆盖它们。请先到环境诊断查看来源。</p><Button tone="quiet" onClick={() => go("diagnostics")}>查看诊断</Button></div>}
       {!usable.length && <div className="notice"><strong>还没有通过验证的节点</strong><p>预置节点不会被默认信任。先执行真实 Git 检测，再开启加速。</p><Button tone="quiet" onClick={() => go("nodes")}>去检测节点</Button></div>}
 
@@ -315,7 +316,7 @@ function Diagnostics({ snapshot, busy }: { snapshot: AppSnapshot; busy: string |
       </section>
       <section className="section-block">
         <div className="section-title"><div><h2>仓库检查</h2><p>可选。检查你主动指定的本地仓库是否设置了显式 pushurl。</p></div></div>
-        <div className="route-input"><input value={repositoryPath} onChange={(event) => setRepositoryPath(event.target.value)} placeholder="/Users/name/Projects/example（可留空）" /><Button onClick={() => setRepositoryPath("")}>清空</Button></div>
+        <div className="route-input"><input value={repositoryPath} onChange={(event) => setRepositoryPath(event.target.value)} placeholder="仓库本地路径（可留空）" /><Button onClick={() => setRepositoryPath("")}>清空</Button></div>
       </section>
       {report && <section className="report-block"><header><div><h2>诊断结果</h2><p>{new Date(report.generatedAt).toLocaleString("zh-CN")}</p></div><Button onClick={copy}>复制脱敏报告</Button></header><dl><div><dt>保存值</dt><dd><code>{report.originalUrl}</code></dd></div><div><dt>fetch 有效地址</dt><dd><code>{report.fetchUrl ?? "无法解析"}</code></dd></div><div><dt>push 有效地址</dt><dd><code>{report.pushUrl ?? "无法解析"}</code></dd></div><div><dt>显式 pushurl</dt><dd className={report.explicitPushUrl ? "danger-text" : ""}><code>{report.explicitPushUrl ?? "未检测到"}</code></dd></div></dl>{report.warnings.map((warning) => <div className="report-warning" key={warning}>{warning}</div>)}</section>}
     </div>
@@ -391,7 +392,7 @@ function Settings({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: string
         <div className="setting-row"><div><strong>日志级别</strong><p>日志会移除凭据、查询参数和命令环境。</p></div><select value={logLevel} onChange={(event) => setLogLevel(event.target.value as "error" | "info" | "debug")}><option value="error">仅错误</option><option value="info">信息</option><option value="debug">调试</option></select></div>
       </section>
       <section className="section-block maintenance"><div className="section-title"><div><h2>数据与恢复</h2><p>恢复只清空 GitBoost 自己的重写规则，不修改仓库 remote。</p></div></div><div className="maintenance-actions"><Button busy={busy === "export"} onClick={() => saveNodes().catch(() => undefined)}>导出节点 JSON</Button><Button busy={busy === "clear-logs"} onClick={() => run("clear-logs", api.clearLogs, "本地日志已清理").catch(() => undefined)}>清理日志</Button><Button tone="danger" busy={busy === "restore"} onClick={() => run("restore", api.restoreGitConfig, "GitBoost 配置已恢复为直连").catch(() => undefined)}>恢复 Git 配置</Button></div></section>
-      <div className="about-line"><span>GitBoost 0.1.0 · macOS MVP</span><span>本地运行 · 无账号 · 无遥测</span></div>
+      <div className="about-line"><span>GitBoost 0.1.0 · macOS / Windows</span><span>本地运行 · 无账号 · 无遥测</span></div>
     </div>
   );
 }

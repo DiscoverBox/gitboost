@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 
-test("core macOS workflow is navigable", async ({ page }) => {
+test("core desktop workflow is navigable", async ({ page }) => {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/");
@@ -32,4 +32,18 @@ test("core macOS workflow is navigable", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "使用日志", exact: true })).toBeVisible();
   await expect(page.getByText("只保存脱敏结果")).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+test("Windows uses the native title bar without duplicate drag spacing", async ({ browser }) => {
+  const context = await browser.newContext({
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36",
+  });
+  const page = await context.newPage();
+  await page.goto("/");
+
+  await expect(page.locator("[data-tauri-drag-region]")).toHaveCount(0);
+  await expect(page.locator(".main-content")).toHaveCSS("padding-top", "0px");
+  await expect(page.locator(".sidebar")).toHaveCSS("padding-top", "25px");
+
+  await context.close();
 });

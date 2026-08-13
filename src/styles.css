@@ -27,6 +27,7 @@ code { font-family: "SFMono-Regular", Menlo, monospace; font-size: 0.88em; }
 .app-shell { position: relative; display: grid; grid-template-columns: 214px minmax(0, 1fr); height: 100%; background: var(--canvas); }
 .window-drag { position: absolute; z-index: 20; top: 0; right: 0; left: 0; height: 29px; }
 .sidebar { display: flex; flex-direction: column; min-width: 0; padding: 54px 12px 18px; background: var(--sidebar); border-right: 1px solid #c6d0d8; }
+.app-shell--native-titlebar .sidebar { padding-top: 25px; }
 .brand-block { padding: 0 14px 26px; }
 .wordmark { font-family: "Avenir Next", ui-rounded, sans-serif; font-size: 22px; font-weight: 700; letter-spacing: -0.025em; }
 .brand-block span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; letter-spacing: 0.04em; }
@@ -45,6 +46,7 @@ code { font-family: "SFMono-Regular", Menlo, monospace; font-size: 0.88em; }
 .line-glyph[data-on="true"]::before { background: var(--accent); }.line-glyph[data-on="true"] span { border-color: var(--accent); background: var(--accent); }
 
 .main-content { min-width: 0; overflow: auto; padding-top: 29px; }
+.app-shell--native-titlebar .main-content { padding-top: 0; }
 .page { width: min(1020px, 100%); min-height: 100%; padding: 42px 54px 46px; }
 .page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; margin-bottom: 32px; }
 .page-header > div:first-child { min-width: 0; max-width: 690px; }
