@@ -23,8 +23,10 @@ use std::{
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-const SYSTEM_NODE_CATALOG_URL: &str =
-    "https://cdn.jsdelivr.net/gh/DiscoverBox/gitboost@main/nodes.json";
+const SYSTEM_NODE_CATALOG_URLS: [&str; 2] = [
+    "https://cdn.jsdelivr.net/gh/DiscoverBox/gitboost@main/nodes.json",
+    "https://cdn.jsdmirror.com/gh/DiscoverBox/gitboost@main/nodes.json",
+];
 const MAX_SYSTEM_NODES: usize = 100;
 const CATALOG_MAX_BYTES: &str = "262144";
 const CATALOG_TIMEOUT_SECONDS: &str = "10";
@@ -1154,6 +1156,24 @@ fn parse_system_catalog(bytes: &[u8]) -> Result<Vec<String>, String> {
 }
 
 fn fetch_system_catalog() -> Result<Vec<u8>, String> {
+    fetch_system_catalog_from(&SYSTEM_NODE_CATALOG_URLS, fetch_system_catalog_url)
+}
+
+fn fetch_system_catalog_from<F>(urls: &[&str], mut fetch: F) -> Result<Vec<u8>, String>
+where
+    F: FnMut(&str) -> Result<Vec<u8>, String>,
+{
+    let mut errors = Vec::with_capacity(urls.len());
+    for url in urls {
+        match fetch(url) {
+            Ok(output) => return Ok(output),
+            Err(error) => errors.push(error),
+        }
+    }
+    Err(format!("无法更新系统节点：{}", errors.join("；")))
+}
+
+fn fetch_system_catalog_url(url: &str) -> Result<Vec<u8>, String> {
     let mut command = Command::new("curl");
     command.args([
         "--location",
@@ -1170,16 +1190,16 @@ fn fetch_system_catalog() -> Result<Vec<u8>, String> {
         CATALOG_TIMEOUT_SECONDS,
         "--max-filesize",
         CATALOG_MAX_BYTES,
-        SYSTEM_NODE_CATALOG_URL,
+        url,
     ]);
     hide_catalog_console(&mut command);
     let output = command
         .output()
-        .map_err(|error| format!("无法更新系统节点：{error}"))?;
+        .map_err(|error| format!("{url}: {error}"))?;
     if !output.status.success() {
         let detail = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
-            "无法更新系统节点：{}",
+            "{url}: {}",
             detail.lines().next().unwrap_or("请求失败")
         ));
     }
@@ -1230,6 +1250,23 @@ mod tests {
             parse_system_catalog(include_bytes!("../../nodes.json")).unwrap(),
             vec![FASTGIT_REWRITE_BASE]
         );
+    }
+
+    #[test]
+    fn system_catalog_uses_the_mirror_when_the_primary_fails() {
+        let mut requested = Vec::new();
+        let output = fetch_system_catalog_from(&SYSTEM_NODE_CATALOG_URLS, |url| {
+            requested.push(url.to_string());
+            if url.contains("cdn.jsdelivr.net") {
+                Err("primary unavailable".into())
+            } else {
+                Ok(br#"["https://fastgit.cc"]"#.to_vec())
+            }
+        })
+        .unwrap();
+
+        assert_eq!(output, br#"["https://fastgit.cc"]"#);
+        assert_eq!(requested, SYSTEM_NODE_CATALOG_URLS);
     }
 
     #[test]

@@ -1,4 +1,4 @@
-export type PageKey = "overview" | "nodes" | "routes" | "downloads" | "usage" | "diagnostics" | "settings";
+export type PageKey = "overview" | "routes" | "downloads" | "usage" | "diagnostics" | "settings";
 export type RouteScope = "allowlist" | "global";
 export type LineMode = "automatic" | "fixed" | "direct";
 export type NodeStatus = "untested" | "available" | "slow" | "incompatible" | "unavailable";

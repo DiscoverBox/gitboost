@@ -8,7 +8,6 @@ import { currentNode, formatLatency, formatRelativeTime, lineStatusLabel, status
 
 const navItems: { key: PageKey; label: string }[] = [
   { key: "overview", label: "总览" },
-  { key: "nodes", label: "自定义节点" },
   { key: "routes", label: "路由清单" },
   { key: "downloads", label: "文件下载" },
   { key: "usage", label: "使用日志" },
@@ -142,12 +141,11 @@ export default function App() {
       </aside>
       <main className="main-content">
         {page === "overview" && <Overview snapshot={snapshot} busy={busy} run={run} go={setPage} />}
-        {page === "nodes" && <Nodes snapshot={snapshot} busy={busy} run={run} onImport={() => setImportOpen(true)} />}
         {page === "routes" && <Routes snapshot={snapshot} busy={busy} run={run} />}
         {page === "downloads" && <Downloads busy={busy} run={run} />}
         {page === "usage" && <UsageLogs snapshot={snapshot} busy={busy} run={run} />}
         {page === "diagnostics" && <Diagnostics snapshot={snapshot} busy={busy} />}
-        {page === "settings" && <Settings snapshot={snapshot} busy={busy} run={run} />}
+        {page === "settings" && <Settings snapshot={snapshot} busy={busy} run={run} onImport={() => setImportOpen(true)} />}
       </main>
       {toast && <div className={`toast toast--${toast.kind}`}>{toast.text}</div>}
       {importOpen && <ImportNodes busy={busy} run={run} onClose={() => setImportOpen(false)} />}
@@ -200,30 +198,34 @@ function Overview({ snapshot, busy, run, go }: { snapshot: AppSnapshot; busy: st
   );
 }
 
-function Nodes({ snapshot, busy, run, onImport }: { snapshot: AppSnapshot; busy: string | null; run: Runner; onImport: () => void }) {
+function CustomNodeSettings({ snapshot, busy, run, onImport }: { snapshot: AppSnapshot; busy: string | null; run: Runner; onImport: () => void }) {
   const [editing, setEditing] = useState<NodeEntry | null>(null);
   const customNodes = snapshot.nodes.filter((node) => !node.builtIn);
   const systemCount = snapshot.nodes.length - customNodes.length;
   return (
-    <div className="page">
-      <PageHeader eyebrow="可选线路" title="自定义节点" description="系统线路由 GitBoost 自动维护；这里只管理你手工添加的代理地址。" actions={<><Button onClick={onImport}>添加节点</Button><Button tone="primary" busy={busy === "test-all"} onClick={() => run("test-all", api.testAllNodes, "全部线路检测完成").catch(() => undefined)}>检测全部线路</Button></>} />
-      <div className="inline-explainer"><strong>系统线路</strong><span>{systemCount} 个，由远程目录和本地缓存自动维护。</span><span>所有线路都会经过本机 git ls-remote 检测后再参与选择。</span></div>
-      <section className="table-shell">
-        <div className="table-head node-grid"><span>节点</span><span>状态</span><span>成功率</span><span>中位耗时</span><span>最近检测</span><span /></div>
+    <section className="section-block node-settings" aria-labelledby="custom-nodes-title">
+      <div className="section-title">
+        <div><h2 id="custom-nodes-title">自定义节点</h2><p>添加并管理自己的代理地址；系统节点仍由 GitBoost 自动维护。</p></div>
+        <div className="section-actions"><Button onClick={onImport}>添加节点</Button><Button busy={busy === "test-all"} onClick={() => run("test-all", api.testAllNodes, "全部线路检测完成").catch(() => undefined)}>检测全部</Button></div>
+      </div>
+      <div className="node-settings-list">
         {customNodes.map((node) => (
-          <div className={`table-row node-grid ${!node.enabled ? "is-disabled" : ""}`} key={node.id}>
+          <div className={`node-setting-row ${!node.enabled ? "is-disabled" : ""}`} key={node.id}>
             <div className="node-name"><StatusDot status={node.health.status} /><div><strong>{node.name}</strong><code>{node.rewriteBase}</code></div></div>
-            <span className={`status-text status-text--${statusTone(node.health.status)}`}>{statusLabel[node.health.status]}</span>
-            <span>{successRate(node.health)}</span><span>{formatLatency(node.health.medianLatencyMs)}</span><span>{formatRelativeTime(node.health.checkedAt)}</span>
+            <div className="node-health">
+              <strong className={`status-text status-text--${statusTone(node.health.status)}`}>{statusLabel[node.health.status]}</strong>
+              <span>{successRate(node.health)} 成功 · {formatLatency(node.health.medianLatencyMs)}</span>
+              <span>{formatRelativeTime(node.health.checkedAt)}</span>
+            </div>
             <div className="row-actions"><Button tone="quiet" busy={busy === `test-${node.id}`} onClick={() => run(`test-${node.id}`, () => api.testNode(node.id), `${node.name} 检测完成`).catch(() => undefined)}>检测</Button><button className="more-button" onClick={() => setEditing(node)} aria-label={`管理 ${node.name}`}>•••</button></div>
             {node.health.failureReason && <p className="row-detail">{node.health.failureReason}</p>}
           </div>
         ))}
-        {!customNodes.length && <div className="empty-state"><strong>还没有自定义节点</strong><p>GitBoost 会自动使用系统线路；也可以添加自己的代理地址。</p></div>}
-      </section>
-      <div className="inline-explainer"><strong>检测仓库</strong><code>https://github.com/octocat/Hello-World.git</code><span>检测隔离运行，不修改你的全局 Git 配置。</span></div>
+        {!customNodes.length && <div className="empty-state compact"><strong>还没有自定义节点</strong><p>通常无需添加，GitBoost 会自动使用系统线路。</p></div>}
+      </div>
+      <p className="node-settings-note">系统线路 {systemCount} 个 · 使用公开仓库进行隔离检测，不修改全局 Git 配置</p>
       {editing && <ManageNode node={editing} busy={busy} run={run} onClose={() => setEditing(null)} />}
-    </div>
+    </section>
   );
 }
 
@@ -401,7 +403,7 @@ function UsageLogs({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: strin
   );
 }
 
-function Settings({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: string | null; run: Runner }) {
+function Settings({ snapshot, busy, run, onImport }: { snapshot: AppSnapshot; busy: string | null; run: Runner; onImport: () => void }) {
   const [minutes, setMinutes] = useState(snapshot.settings.healthCheckMinutes);
   const [logLevel, setLogLevel] = useState(snapshot.settings.logLevel);
   const [launchAtLogin, setLaunchAtLogin] = useState(snapshot.settings.launchAtLogin);
@@ -420,6 +422,7 @@ function Settings({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: string
         <div className="setting-row"><div><strong>登录时启动</strong><p>保持托盘运行，以便节点失效后重新选路。</p></div><Switch label="登录时启动" checked={launchAtLogin} onChange={(enabled) => setAutostart(enabled).catch(() => undefined)} /></div>
         <div className="setting-row"><div><strong>日志级别</strong><p>日志会移除凭据、查询参数和命令环境。</p></div><select value={logLevel} onChange={(event) => setLogLevel(event.target.value as "error" | "info" | "debug")}><option value="error">仅错误</option><option value="info">信息</option><option value="debug">调试</option></select></div>
       </section>
+      <CustomNodeSettings snapshot={snapshot} busy={busy} run={run} onImport={onImport} />
       <section className="section-block maintenance"><div className="section-title"><div><h2>数据与恢复</h2><p>恢复只清空 GitBoost 自己的重写规则，不修改仓库 remote。</p></div></div><div className="maintenance-actions"><Button busy={busy === "export"} onClick={() => saveNodes().catch(() => undefined)}>导出自定义节点</Button><Button busy={busy === "clear-logs"} onClick={() => run("clear-logs", api.clearLogs, "本地日志已清理").catch(() => undefined)}>清理日志</Button><Button tone="danger" busy={busy === "restore"} onClick={() => run("restore", api.restoreGitConfig, "GitBoost 配置已恢复为直连").catch(() => undefined)}>恢复 Git 配置</Button></div></section>
       <div className="about-line"><span>GitBoost 0.1.0 · macOS / Windows</span><span>本地运行 · 无账号 · 无遥测</span></div>
     </div>

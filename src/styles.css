@@ -87,8 +87,6 @@ code { font-family: "SFMono-Regular", Menlo, monospace; font-size: 0.88em; }
 .segmented button { min-width: 82px; padding: 5px 9px; border: 0; border-radius: 5px; background: transparent; color: #52616d; font-size: 11px; cursor: pointer; }.segmented button.is-active { background: white; color: var(--ink); font-weight: 650; box-shadow: 0 1px 3px rgb(34 51 64 / 13%); }
 .page-footnote { margin-top: 30px; padding-top: 13px; border-top: 1px solid color-mix(in srgb, var(--rule), transparent 25%); color: var(--muted); font-size: 10px; line-height: 1.55; }
 
-.table-shell { overflow: hidden; border-top: 1px solid #bec9d2; border-bottom: 1px solid #bec9d2; }
-.node-grid { display: grid; grid-template-columns: minmax(230px, 2fr) 0.72fr 0.62fr 0.72fr 0.85fr 94px; align-items: center; column-gap: 16px; }
 .table-head { min-height: 34px; padding: 0 11px; background: #e2e8ed; color: var(--muted); font-size: 10px; font-weight: 650; }
 .table-row { position: relative; min-height: 64px; padding: 10px 11px; border-top: 1px solid #d3dbe1; background: rgb(248 250 251 / 75%); font-size: 11px; }.table-row:hover { background: #f9fbfc; }.table-row.is-disabled { opacity: 0.52; }
 .node-name { display: flex; align-items: center; min-width: 0; gap: 10px; }.node-name > div { min-width: 0; }.node-name strong, .node-name code { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.node-name strong { font-size: 12px; }.node-name code { margin-top: 4px; color: var(--muted); font-size: 9px; }
@@ -149,6 +147,14 @@ code { font-family: "SFMono-Regular", Menlo, monospace; font-size: 0.88em; }
 
 .settings-list { border-top: 1px solid #bdc8d1; }
 .setting-row { display: flex; align-items: center; justify-content: space-between; gap: 24px; min-height: 72px; padding: 14px 5px; border-bottom: 1px solid var(--rule); }.setting-row strong { font-size: 12px; }.setting-row p { margin: 4px 0 0; color: var(--muted); font-size: 10px; line-height: 1.45; }.setting-row select { min-width: 140px; height: 30px; padding: 3px 28px 3px 9px; border: 1px solid #bdc8d1; border-radius: 6px; background: #f9fbfc; font-size: 11px; }
+.section-actions { display: flex; gap: 8px; }
+.node-settings-list { overflow: hidden; border: 1px solid #c4ced7; border-radius: 8px; background: rgb(248 250 251 / 72%); }
+.node-setting-row { position: relative; display: grid; grid-template-columns: minmax(220px, 1fr) auto 76px; align-items: center; gap: 24px; min-height: 70px; padding: 12px 14px; font-size: 10px; }
+.node-setting-row + .node-setting-row { border-top: 1px solid var(--rule); }
+.node-setting-row.is-disabled { opacity: 0.52; }
+.node-health { display: grid; grid-template-columns: 70px 105px 72px; align-items: center; gap: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.node-health strong { font-size: 10px; }
+.node-settings-note { margin: 9px 2px 0; color: var(--muted); font-size: 9px; line-height: 1.5; }
 .switch { position: relative; width: 35px; height: 20px; padding: 0; border: 1px solid #aab6bf; border-radius: 999px; background: #c8d1d8; cursor: pointer; transition: background 120ms ease; }.switch span { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: white; box-shadow: 0 1px 2px rgb(29 45 58 / 25%); transition: transform 120ms ease; }.switch--on { border-color: #25658f; background: var(--accent); }.switch--on span { transform: translateX(15px); }
 .maintenance-actions { display: flex; gap: 8px; }.about-line { display: flex; justify-content: space-between; margin-top: 34px; padding-top: 12px; border-top: 1px solid color-mix(in srgb, var(--rule), transparent 25%); color: var(--muted); font-size: 9px; }
 
@@ -168,7 +174,8 @@ code { font-family: "SFMono-Regular", Menlo, monospace; font-size: 0.88em; }
 
 @media (max-width: 1080px) {
   .page { padding-right: 34px; padding-left: 34px; }
-  .node-grid { grid-template-columns: minmax(210px, 2fr) 0.72fr 0.64fr 0.75fr 90px; }.node-grid > :nth-child(5) { display: none; }
+  .node-setting-row { grid-template-columns: minmax(210px, 1fr) auto 76px; gap: 14px; }
+  .node-health { grid-template-columns: 65px 95px; gap: 10px; }.node-health > :last-child { display: none; }
 }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; } }
