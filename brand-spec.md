@@ -11,17 +11,17 @@
 
 ## 色板
 
-- Canvas：`#EEF2F5`
-- Sidebar：`#E4EAF0`
-- Surface：`#F8FAFB`
-- Ink：`#16212B`
-- Muted：`#63717E`
-- Rule：`#CBD4DC`
-- Accent：`#2B6F9F`
-- Accent soft：`#DCEAF3`
-- Success：`#28745B`
-- Warning：`#9A6A18`
-- Danger：`#A44343`
+- Canvas：`#F7F9FC`
+- Sidebar：`#EDF4FB`
+- Surface：`#FFFFFF`
+- Ink：`#142033`
+- Muted：`#5D6B7A`
+- Rule：`#DCE4EC`
+- Accent：`#1769C2`
+- Accent soft：`#E6F1FC`
+- Success：`#187A4F`
+- Warning：`#A55D00`
+- Danger：`#B93645`
 
 ## 字型
 

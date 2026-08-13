@@ -38,6 +38,29 @@ test("core desktop workflow is navigable", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("uses the bright interface palette", async ({ page }) => {
+  await page.goto("/");
+
+  const palette = await page.locator(":root").evaluate((root) => {
+    const styles = getComputedStyle(root);
+    return {
+      canvas: styles.getPropertyValue("--canvas").trim(),
+      sidebar: styles.getPropertyValue("--sidebar").trim(),
+      surface: styles.getPropertyValue("--surface").trim(),
+      accent: styles.getPropertyValue("--accent").trim(),
+    };
+  });
+
+  expect(palette).toEqual({
+    canvas: "#f7f9fc",
+    sidebar: "#edf4fb",
+    surface: "#ffffff",
+    accent: "#1769c2",
+  });
+  await expect(page.locator(".status-board")).toHaveCSS("background-color", "rgb(255, 255, 255)");
+  await expect(page.getByRole("navigation", { name: "主要导航" }).getByRole("button", { name: "总览" })).toHaveCSS("color", "rgb(23, 105, 194)");
+});
+
 test("node import keeps failures open and reports actual results", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "设置", exact: true }).click();
