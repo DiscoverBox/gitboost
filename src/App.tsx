@@ -179,7 +179,7 @@ function Overview({ snapshot, busy, run, go }: { snapshot: AppSnapshot; busy: st
       </section>
 
       {!snapshot.environment.gitAvailable && <div className="notice notice--danger"><strong>未检测到系统 Git</strong><p>请先安装 Git（Windows 推荐 Git for Windows），然后再开启加速。</p></div>}
-      {snapshot.environment.conflicts > 0 && <div className="notice notice--warning"><strong>发现 {snapshot.environment.conflicts} 条 URL 重写冲突</strong><p>GitBoost 不会覆盖它们。请先到环境诊断查看来源。</p><Button tone="quiet" onClick={() => go("diagnostics")}>查看诊断</Button></div>}
+      {snapshot.environment.conflictScanError ? <div className="notice notice--danger"><strong>URL 重写冲突检查失败</strong><p>{snapshot.environment.conflictScanError}</p><Button tone="quiet" onClick={() => go("diagnostics")}>查看诊断</Button></div> : snapshot.environment.conflicts > 0 && <div className="notice notice--warning"><strong>发现 {snapshot.environment.conflicts} 条 URL 重写冲突</strong><p>GitBoost 不会覆盖它们。请先到环境诊断查看来源。</p><Button tone="quiet" onClick={() => go("diagnostics")}>查看诊断</Button></div>}
       {!usable.length && <div className="notice"><strong>还没有通过验证的节点</strong><p>预置节点不会被默认信任。先执行真实 Git 检测，再开启加速。</p><Button tone="quiet" onClick={() => go("nodes")}>去检测节点</Button></div>}
 
       <section className="section-block">
@@ -303,8 +303,9 @@ function Downloads({ busy, run }: { busy: string | null; run: Runner }) {
 function Diagnostics({ snapshot, busy }: { snapshot: AppSnapshot; busy: string | null }) {
   const [repositoryPath, setRepositoryPath] = useState("");
   const [report, setReport] = useState<DiagnosticReport | null>(null);
+  const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const diagnose = async () => { setRunning(true); try { setReport(await api.runDiagnostics(repositoryPath)); } finally { setRunning(false); } };
+  const diagnose = async () => { setRunning(true); setDiagnosticError(null); setReport(null); try { setReport(await api.runDiagnostics(repositoryPath)); } catch (error) { setDiagnosticError(errorMessage(error)); } finally { setRunning(false); } };
   const copy = () => report && navigator.clipboard.writeText(report.reportText);
   return (
     <div className="page">
@@ -312,13 +313,14 @@ function Diagnostics({ snapshot, busy }: { snapshot: AppSnapshot; busy: string |
       <section className="diagnostic-summary">
         <div><span>系统 Git</span><strong>{snapshot.environment.gitAvailable ? snapshot.environment.gitVersion : "未找到"}</strong><code>{snapshot.environment.gitPath ?? "—"}</code></div>
         <div><span>独立配置</span><strong>{snapshot.environment.includeRegistered ? "已注册" : "未注册"}</strong><code>{snapshot.environment.configPath}</code></div>
-        <div><span>重写冲突</span><strong className={snapshot.environment.conflicts ? "danger-text" : ""}>{snapshot.environment.conflicts ? `${snapshot.environment.conflicts} 条` : "未发现"}</strong><p>不覆盖其他应用或用户配置。</p></div>
+        <div><span>重写冲突</span><strong className={snapshot.environment.conflicts || snapshot.environment.conflictScanError ? "danger-text" : ""}>{snapshot.environment.conflictScanError ? "检查失败" : snapshot.environment.conflicts ? `${snapshot.environment.conflicts} 条` : "未发现"}</strong><p>{snapshot.environment.conflictScanError ?? "不覆盖其他应用或用户配置。"}</p></div>
       </section>
       <section className="section-block">
         <div className="section-title"><div><h2>仓库检查</h2><p>可选。检查你主动指定的本地仓库是否设置了显式 pushurl。</p></div></div>
         <div className="route-input"><input value={repositoryPath} onChange={(event) => setRepositoryPath(event.target.value)} placeholder="仓库本地路径（可留空）" /><Button onClick={() => setRepositoryPath("")}>清空</Button></div>
       </section>
-      {report && <section className="report-block"><header><div><h2>诊断结果</h2><p>{new Date(report.generatedAt).toLocaleString("zh-CN")}</p></div><Button onClick={copy}>复制脱敏报告</Button></header><dl><div><dt>保存值</dt><dd><code>{report.originalUrl}</code></dd></div><div><dt>fetch 有效地址</dt><dd><code>{report.fetchUrl ?? "无法解析"}</code></dd></div><div><dt>push 有效地址</dt><dd><code>{report.pushUrl ?? "无法解析"}</code></dd></div><div><dt>显式 pushurl</dt><dd className={report.explicitPushUrl ? "danger-text" : ""}><code>{report.explicitPushUrl ?? "未检测到"}</code></dd></div></dl>{report.warnings.map((warning) => <div className="report-warning" key={warning}>{warning}</div>)}</section>}
+      {diagnosticError && <div className="notice notice--danger"><strong>诊断运行失败</strong><p>{diagnosticError}</p></div>}
+      {report && <section className="report-block"><header><div><h2>诊断结果</h2><p>{new Date(report.generatedAt).toLocaleString("zh-CN")}</p></div><Button onClick={copy}>复制脱敏报告</Button></header><dl><div><dt>保存值</dt><dd><code>{report.originalUrl}</code></dd></div><div><dt>fetch 有效地址</dt><dd><code>{report.fetchUrl ?? "无法解析"}</code></dd></div><div><dt>push 有效地址</dt><dd><code>{report.pushUrl ?? "无法解析"}</code></dd></div><div><dt>显式 pushurl</dt><dd className={report.explicitPushUrl || report.repositoryError ? "danger-text" : ""}><code>{report.repositoryError ? "检查失败" : report.explicitPushUrl ?? "未检测到"}</code></dd></div></dl>{report.warnings.map((warning) => <div className="report-warning" key={warning}>{warning}</div>)}</section>}
     </div>
   );
 }

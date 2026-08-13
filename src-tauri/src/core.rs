@@ -123,7 +123,11 @@ impl AppCore {
         let settings = self.settings()?;
         let nodes = self.node_entries()?;
         let routes = self.routes()?;
-        let conflicts = git::find_conflicts(&self.paths.gitconfig).len();
+        let (conflicts, conflict_scan_error) =
+            match git::find_conflicts(&self.paths.gitconfig, None) {
+                Ok(conflicts) => (conflicts.len(), None),
+                Err(error) => (0, Some(error)),
+            };
         Ok(AppSnapshot {
             settings,
             nodes,
@@ -135,6 +139,7 @@ impl AppCore {
                 include_registered: git::include_registered(&self.paths.gitconfig),
                 config_path: self.paths.gitconfig.display().to_string(),
                 conflicts,
+                conflict_scan_error,
             },
         })
     }
@@ -547,6 +552,33 @@ impl AppCore {
             git::build_config(settings, selected, routes, Some(&self.paths.trace_socket))?;
         let previous = fs::read(&self.paths.gitconfig).ok();
         let registered_before = git::include_registered(&self.paths.gitconfig);
+        let (validation_url, expect_accelerated) = match settings.route_scope {
+            RouteScope::Global => (TEST_REPOSITORY.to_string(), true),
+            RouteScope::Allowlist => match routes.first() {
+                Some(route) => (
+                    route
+                        .repository_url
+                        .strip_suffix(".git")
+                        .ok_or_else(|| "清单路由不是规范化的 GitHub HTTPS 仓库地址".to_string())?
+                        .to_string(),
+                    true,
+                ),
+                None => (TEST_REPOSITORY.to_string(), false),
+            },
+        };
+        let validate = |config_path: &Path| -> Result<(), String> {
+            let (fetch, push) = git::effective_urls(config_path, &validation_url)?;
+            if expect_accelerated {
+                let node = selected.ok_or_else(|| "没有通过检测的可用节点".to_string())?;
+                if !fetch.starts_with(&node.rewrite_base) {
+                    return Err("配置未能把 fetch 重写到所选节点".into());
+                }
+            }
+            if !push.starts_with("https://github.com/") {
+                return Err("配置的标准 push 未保持 GitHub 直连".into());
+            }
+            Ok(())
+        };
         if settings.acceleration_enabled && settings.line_mode != LineMode::Direct {
             let mut candidate = NamedTempFile::new_in(&self.paths.root)
                 .map_err(|error| format!("无法创建配置候选文件：{error}"))?;
@@ -556,22 +588,7 @@ impl AppCore {
                 .as_file()
                 .sync_all()
                 .map_err(|error| format!("无法同步配置候选：{error}"))?;
-            let validation_url = match settings.route_scope {
-                RouteScope::Global => TEST_REPOSITORY,
-                RouteScope::Allowlist => routes
-                    .first()
-                    .map(|route| route.repository_url.as_str())
-                    .unwrap_or(TEST_REPOSITORY),
-            };
-            let (fetch, push) = git::effective_urls(candidate.path(), validation_url)?;
-            if settings.route_scope == RouteScope::Global
-                && selected.is_some_and(|node| !fetch.starts_with(&node.rewrite_base))
-            {
-                return Err("候选配置未能把 fetch 重写到所选节点".into());
-            }
-            if !push.starts_with("https://github.com/") {
-                return Err("候选配置的标准 push 未保持 GitHub 直连".into());
-            }
+            validate(candidate.path())?;
         }
         let _ = backup_file(
             &self.paths.gitconfig,
@@ -588,14 +605,7 @@ impl AppCore {
             }
         }
         if settings.acceleration_enabled && settings.line_mode != LineMode::Direct {
-            let validation_url = match settings.route_scope {
-                RouteScope::Global => TEST_REPOSITORY,
-                RouteScope::Allowlist => routes
-                    .first()
-                    .map(|route| route.repository_url.as_str())
-                    .unwrap_or(TEST_REPOSITORY),
-            };
-            if let Err(error) = git::effective_urls(&self.paths.gitconfig, validation_url) {
+            if let Err(error) = validate(&self.paths.gitconfig) {
                 if let Some(bytes) = previous {
                     let _ = atomic_write(&self.paths.gitconfig, &bytes);
                 }
@@ -773,9 +783,25 @@ impl AppCore {
             .first()
             .map(|route| route.repository_url.clone())
             .unwrap_or_else(|| TEST_REPOSITORY.into());
-        let effective = git::effective_urls(&self.paths.gitconfig, &original_url).ok();
-        let explicit = repository_path.and_then(git::explicit_push_url);
-        let conflicts = git::find_conflicts(&self.paths.gitconfig);
+        let (effective, effective_error) =
+            match git::effective_urls(&self.paths.gitconfig, &original_url) {
+                Ok(urls) => (Some(urls), None),
+                Err(error) => (None, Some(error)),
+            };
+        let (explicit, repository_error) = match repository_path {
+            Some(path) => match git::explicit_push_url(path) {
+                Ok(value) => (value, None),
+                Err(error) => (None, Some(error)),
+            },
+            None => (None, None),
+        };
+        let conflict_repository = repository_path.filter(|_| repository_error.is_none());
+        let (conflicts, conflict_scan_error) =
+            match git::find_conflicts(&self.paths.gitconfig, conflict_repository) {
+                Ok(conflicts) => (conflicts, None),
+                Err(error) => (vec![], Some(git::redact_path(&error))),
+            };
+        let repository_error = repository_error.map(|error| git::redact_path(&error));
         let mut warnings = vec![];
         if explicit.is_some() {
             warnings.push(
@@ -783,11 +809,26 @@ impl AppCore {
                     .into(),
             );
         }
+        if let Some(error) = repository_error.as_deref() {
+            warnings.push(format!("仓库检查失败：{}。无法确认显式 pushurl。", error));
+        }
+        if let Some(error) = conflict_scan_error.as_deref() {
+            warnings.push(format!(
+                "URL 重写冲突检查失败：{}。当前不能确认是否存在冲突。",
+                error
+            ));
+        }
+        if let Some(error) = effective_error.as_deref() {
+            warnings.push(format!(
+                "有效 fetch/push 地址解析失败：{}。",
+                git::redact_path(error)
+            ));
+        }
         if !conflicts.is_empty() {
             warnings
                 .push("发现其他 URL 重写规则。GitBoost 没有覆盖它们，请按来源逐项检查。".into());
         }
-        if settings.route_scope == RouteScope::Global {
+        if settings.acceleration_enabled && settings.route_scope == RouteScope::Global {
             warnings.push(
                 "全局加速无法自动识别私有仓库；所有 GitHub HTTPS 读取都会经过当前节点。".into(),
             );
@@ -797,24 +838,45 @@ impl AppCore {
             .as_ref()
             .map(|(fetch, _)| git::sanitize_url(fetch));
         let push = effective.as_ref().map(|(_, push)| git::sanitize_url(push));
+        let git_path = git::git_path().map(|path| git::redact_path(&path));
+        let config_path = git::redact_path(&self.paths.gitconfig.display().to_string());
+        let include_registered = git::include_registered(&self.paths.gitconfig);
+        let conflict_text = if let Some(error) = conflict_scan_error.as_deref() {
+            format!("- 检查失败：{error}")
+        } else if conflicts.is_empty() {
+            "- 无".into()
+        } else {
+            conflicts
+                .iter()
+                .map(|line| format!("- {line}"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let explicit_text = if let Some(error) = repository_error.as_deref() {
+            format!("检查失败：{error}")
+        } else {
+            explicit.as_deref().unwrap_or("未检测到").into()
+        };
         let report_text = format!(
             "GitBoost 诊断报告\n生成时间: {generated}\nGit: {}\nGit 路径: {}\n配置: {}\ninclude: {}\n测试 URL: {}\nfetch: {}\npush: {}\n显式 pushurl: {}\n冲突:\n{}\n警告:\n{}",
-            git::git_version().unwrap_or_else(|| "未找到".into()), git::git_path().unwrap_or_else(|| "未找到".into()), self.paths.gitconfig.display(), git::include_registered(&self.paths.gitconfig), original_url,
-            fetch.as_deref().unwrap_or("无法解析"), push.as_deref().unwrap_or("无法解析"), explicit.as_deref().unwrap_or("未检测到"),
-            if conflicts.is_empty() { "- 无".into() } else { conflicts.iter().map(|line| format!("- {line}")).collect::<Vec<_>>().join("\n") },
+            git::git_version().unwrap_or_else(|| "未找到".into()), git_path.as_deref().unwrap_or("未找到"), config_path, include_registered, original_url,
+            fetch.as_deref().unwrap_or("无法解析"), push.as_deref().unwrap_or("无法解析"), explicit_text,
+            conflict_text,
             if warnings.is_empty() { "- 无".into() } else { warnings.iter().map(|line| format!("- {line}")).collect::<Vec<_>>().join("\n") },
         );
         Ok(DiagnosticReport {
             generated_at: generated,
-            git_path: git::git_path(),
+            git_path,
             git_version: git::git_version(),
-            config_path: self.paths.gitconfig.display().to_string(),
-            include_registered: git::include_registered(&self.paths.gitconfig),
+            config_path,
+            include_registered,
             conflicts,
+            conflict_scan_error,
             original_url,
             fetch_url: fetch,
             push_url: push,
             explicit_push_url: explicit,
+            repository_error,
             warnings,
             report_text,
         })
@@ -933,5 +995,20 @@ mod tests {
                 .unwrap()
                 .contains("secret-token")
         );
+    }
+
+    #[test]
+    fn diagnostics_reports_an_invalid_repository_as_a_check_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+
+        let report = core.diagnostics(Some(directory.path())).unwrap();
+
+        assert_eq!(
+            report.repository_error.as_deref(),
+            Some("指定路径不是 Git 仓库")
+        );
+        assert!(report.explicit_push_url.is_none());
+        assert!(report.report_text.contains("显式 pushurl: 检查失败"));
     }
 }

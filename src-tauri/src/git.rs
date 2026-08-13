@@ -4,6 +4,7 @@ use crate::models::{
 };
 use chrono::Utc;
 use std::{
+    fs,
     io::Read,
     path::Path,
     process::{Command, Output, Stdio},
@@ -235,14 +236,16 @@ pub fn build_config(
         }
         RouteScope::Allowlist => {
             for route in routes {
-                let suffix = route
+                let repository = route
                     .repository_url
+                    .strip_suffix(".git")
+                    .ok_or_else(|| "路由不是规范化的 GitHub HTTPS 仓库地址".to_string())?;
+                let suffix = repository
                     .strip_prefix("https://github.com/")
                     .ok_or_else(|| "路由不是 GitHub HTTPS 地址".to_string())?;
                 let accelerated = escape_subsection(&format!("{}{suffix}", node.rewrite_base));
                 output.push_str(&format!(
-                    "[url \"{accelerated}\"]\n\tinsteadOf = {}\n\n",
-                    route.repository_url
+                    "[url \"{accelerated}\"]\n\tinsteadOf = {repository}\n\n"
                 ));
             }
         }
@@ -256,22 +259,39 @@ fn escape_subsection(value: &str) -> String {
 }
 
 pub fn include_registered(config_path: &Path) -> bool {
-    run_git(
+    matching_include_values(config_path).is_ok_and(|values| !values.is_empty())
+}
+
+fn matching_include_values(config_path: &Path) -> Result<Vec<String>, String> {
+    let output = run_git(
         ["config", "--global", "--get-all", "include.path"],
         None,
         Duration::from_secs(5),
-    )
-    .ok()
-    .filter(|output| output.status.success())
-    .is_some_and(|output| {
-        String::from_utf8_lossy(&output.stdout)
-            .lines()
-            .any(|line| Path::new(line.trim()) == config_path)
-    })
+    )?;
+    if output.status.code() == Some(1) {
+        return Ok(vec![]);
+    }
+    if !output.status.success() {
+        return Err(command_error(&output));
+    }
+    let mut values = vec![];
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let line = line.trim();
+        if same_config_file(Path::new(line), config_path)? {
+            values.push(line.to_owned());
+        }
+    }
+    Ok(values)
+}
+
+fn same_config_file(left: &Path, right: &Path) -> Result<bool, String> {
+    let right = fs::canonicalize(right)
+        .map_err(|error| format!("无法解析 GitBoost 配置路径 {}：{error}", right.display()))?;
+    Ok(fs::canonicalize(left).is_ok_and(|left| left == right))
 }
 
 pub fn register_include(config_path: &Path) -> Result<(), String> {
-    if include_registered(config_path) {
+    if !matching_include_values(config_path)?.is_empty() {
         return Ok(());
     }
     let path = config_path.to_string_lossy();
@@ -288,53 +308,96 @@ pub fn register_include(config_path: &Path) -> Result<(), String> {
 }
 
 pub fn unregister_include(config_path: &Path) -> Result<(), String> {
-    if !include_registered(config_path) {
-        return Ok(());
+    let mut values = matching_include_values(config_path)?;
+    values.sort();
+    values.dedup();
+    for value in values {
+        let output = run_git(
+            [
+                "config",
+                "--global",
+                "--unset-all",
+                "--fixed-value",
+                "include.path",
+                value.as_str(),
+            ],
+            None,
+            Duration::from_secs(8),
+        )?;
+        if !output.status.success() && output.status.code() != Some(5) {
+            return Err(command_error(&output));
+        }
     }
-    let path = config_path.to_string_lossy();
-    let output = run_git(
-        [
-            "config",
-            "--global",
-            "--unset-all",
-            "include.path",
-            path.as_ref(),
-        ],
-        None,
-        Duration::from_secs(8),
-    )?;
-    if output.status.success() || output.status.code() == Some(5) {
+    if matching_include_values(config_path)?.is_empty() {
         Ok(())
     } else {
-        Err(command_error(&output))
+        Err("无法精确移除 GitBoost 的 include.path".into())
     }
 }
 
-pub fn find_conflicts(config_path: &Path) -> Vec<String> {
+pub fn find_conflicts(
+    config_path: &Path,
+    repository_path: Option<&Path>,
+) -> Result<Vec<String>, String> {
     let pattern = r"^url\..*\.(insteadOf|pushInsteadOf)$";
-    let Ok(output) = run_git(
+    let temporary = if repository_path.is_none() {
+        Some(tempfile::tempdir().map_err(|error| format!("无法创建诊断目录：{error}"))?)
+    } else {
+        None
+    };
+    let directory = repository_path
+        .or_else(|| temporary.as_ref().map(|value| value.path()))
+        .expect("诊断目录始终存在")
+        .to_string_lossy();
+    let output = run_git(
         [
+            "-C",
+            directory.as_ref(),
             "config",
-            "--global",
             "--includes",
             "--show-origin",
+            "--null",
             "--get-regexp",
             pattern,
         ],
         None,
         Duration::from_secs(8),
-    ) else {
-        return vec![];
-    };
-    if !output.status.success() {
-        return vec![];
+    )?;
+    if output.status.code() == Some(1) {
+        return Ok(vec![]);
     }
-    let own = config_path.to_string_lossy();
-    String::from_utf8_lossy(&output.stdout)
-        .lines()
-        .filter(|line| !line.contains(own.as_ref()))
-        .map(sanitize_line)
-        .collect()
+    if !output.status.success() {
+        return Err(command_error(&output));
+    }
+    parse_conflicts(&output.stdout, config_path)
+}
+
+fn parse_conflicts(output: &[u8], config_path: &Path) -> Result<Vec<String>, String> {
+    let mut fields = output.split(|byte| *byte == 0);
+    let mut conflicts = vec![];
+    while let (Some(origin), Some(entry)) = (fields.next(), fields.next()) {
+        let origin = String::from_utf8_lossy(origin);
+        if let Some(origin_path) = origin.strip_prefix("file:").map(Path::new) {
+            if origin_path.is_absolute() && same_config_file(origin_path, config_path)? {
+                continue;
+            }
+        }
+        let entry = String::from_utf8_lossy(entry);
+        let Some((_, rewrite_prefix)) = entry.split_once('\n') else {
+            continue;
+        };
+        if !affects_github_https(rewrite_prefix.trim()) {
+            continue;
+        }
+        let entry = entry.replace('\n', " ");
+        conflicts.push(redact_path(&sanitize_line(&format!("{origin} {entry}"))));
+    }
+    Ok(conflicts)
+}
+
+fn affects_github_https(rewrite_prefix: &str) -> bool {
+    const GITHUB_HTTPS: &str = "https://github.com/";
+    GITHUB_HTTPS.starts_with(rewrite_prefix) || rewrite_prefix.starts_with(GITHUB_HTTPS)
 }
 
 pub fn effective_urls(config_path: &Path, original_url: &str) -> Result<(String, String), String> {
@@ -409,12 +472,20 @@ pub fn effective_urls(config_path: &Path, original_url: &str) -> Result<(String,
     ))
 }
 
-pub fn explicit_push_url(repository_path: &Path) -> Option<String> {
+pub fn explicit_push_url(repository_path: &Path) -> Result<Option<String>, String> {
     if !repository_path.exists() {
-        return None;
+        return Err("仓库路径不存在".into());
     }
     let path = repository_path.to_string_lossy();
-    run_git(
+    let repository = run_git(
+        ["-C", path.as_ref(), "rev-parse", "--git-dir"],
+        None,
+        Duration::from_secs(5),
+    )?;
+    if !repository.status.success() {
+        return Err("指定路径不是 Git 仓库".into());
+    }
+    let output = run_git(
         [
             "-C",
             path.as_ref(),
@@ -424,14 +495,16 @@ pub fn explicit_push_url(repository_path: &Path) -> Option<String> {
         ],
         None,
         Duration::from_secs(5),
-    )
-    .ok()
-    .and_then(|output| {
-        output
-            .status
-            .success()
-            .then(|| sanitize_url(String::from_utf8_lossy(&output.stdout).trim()))
-    })
+    )?;
+    if output.status.success() {
+        Ok(Some(sanitize_url(
+            String::from_utf8_lossy(&output.stdout).trim(),
+        )))
+    } else if output.status.code() == Some(1) {
+        Ok(None)
+    } else {
+        Err(command_error(&output))
+    }
 }
 
 pub fn sanitize_url(raw: &str) -> String {
@@ -462,6 +535,32 @@ fn sanitize_line(line: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+pub fn redact_path(raw: &str) -> String {
+    let home = std::env::var("USERPROFILE")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .or_else(|| std::env::var("HOME").ok().filter(|value| !value.is_empty()));
+    match home {
+        Some(home) => redact_path_with_home(raw, &home),
+        None => raw.to_owned(),
+    }
+}
+
+fn redact_path_with_home(raw: &str, home: &str) -> String {
+    let windows_home = home.contains('\\') || home.as_bytes().get(1) == Some(&b':');
+    let replacement = if windows_home { "%USERPROFILE%" } else { "~" };
+    let mut redacted = raw.to_owned();
+    let mut variants = vec![home.to_owned()];
+    if windows_home {
+        variants.push(home.replace('\\', "/"));
+        variants.push(home.replace('/', "\\"));
+    }
+    for variant in variants {
+        redacted = redacted.replace(&variant, replacement);
+    }
+    redacted
 }
 
 fn command_error(output: &Output) -> String {
@@ -541,9 +640,48 @@ mod tests {
             created_at: Utc::now(),
         }];
         let config = build_config(&settings, Some(&node()), &routes, None).unwrap();
-        assert!(config.contains("https://fastgit.cc/https://github.com/openai/codex.git"));
+        assert!(config.contains("[url \"https://fastgit.cc/https://github.com/openai/codex\"]"));
+        assert!(config.contains("insteadOf = https://github.com/openai/codex\n"));
+        assert!(!config.contains("insteadOf = https://github.com/openai/codex.git"));
         assert!(!config.contains("[url \"https://fastgit.cc/https://github.com/\"]"));
         assert!(config.contains("pushInsteadOf = https://github.com/"));
+    }
+
+    #[test]
+    fn allowlist_rewrite_preserves_git_and_repository_suffixes() {
+        let mut settings = Settings::default();
+        settings.acceleration_enabled = true;
+        let routes = vec![RouteEntry {
+            id: "1".into(),
+            repository_url: "https://github.com/foru17/neko-master.git".into(),
+            created_at: Utc::now(),
+        }];
+        let directory = tempfile::tempdir().unwrap();
+        let config_path = directory.path().join("gitboost.gitconfig");
+        fs::write(
+            &config_path,
+            build_config(&settings, Some(&node()), &routes, None).unwrap(),
+        )
+        .unwrap();
+
+        for (original, expected_fetch) in [
+            (
+                "https://github.com/foru17/neko-master",
+                "https://fastgit.cc/https://github.com/foru17/neko-master",
+            ),
+            (
+                "https://github.com/foru17/neko-master.git",
+                "https://fastgit.cc/https://github.com/foru17/neko-master.git",
+            ),
+            (
+                "https://github.com/foru17/neko-master-private",
+                "https://fastgit.cc/https://github.com/foru17/neko-master-private",
+            ),
+        ] {
+            let (fetch, push) = effective_urls(&config_path, original).unwrap();
+            assert_eq!(fetch, expected_fetch);
+            assert_eq!(push, original);
+        }
     }
 
     #[test]
@@ -588,6 +726,120 @@ mod tests {
         assert!(!safe.contains("secret"));
         assert!(!safe.contains("abc"));
         assert!(!safe.contains("#x"));
+    }
+
+    #[test]
+    fn conflict_parser_ignores_managed_config_and_unrelated_rules() {
+        let directory = tempfile::tempdir().unwrap();
+        let managed = directory.path().join("gitboost.gitconfig");
+        let other = directory.path().join("user.gitconfig");
+        fs::write(&managed, "").unwrap();
+        fs::write(&other, "").unwrap();
+        let output = format!(
+            "file:{}\0url.https://fastgit.cc/.insteadof\nhttps://github.com/\0file:{}\0url.https://proxy.example/.insteadof\nhttps://github.com/\0file:{}\0url.https://gitlab-proxy.example/.insteadof\nhttps://gitlab.com/\0",
+            managed.display(),
+            other.display(),
+            other.display()
+        );
+
+        let conflicts = parse_conflicts(output.as_bytes(), &managed).unwrap();
+
+        assert_eq!(conflicts.len(), 1);
+        assert!(conflicts[0].contains("url.https://proxy.example/.insteadof"));
+        assert!(!conflicts[0].contains("gitlab-proxy"));
+    }
+
+    #[test]
+    fn conflict_parser_reports_relative_repository_config() {
+        let directory = tempfile::tempdir().unwrap();
+        let managed = directory.path().join("gitboost.gitconfig");
+        fs::write(&managed, "").unwrap();
+        let output =
+            b"file:.git/config\0url.https://proxy.example/.insteadof\nhttps://github.com/\0";
+
+        let conflicts = parse_conflicts(output, &managed).unwrap();
+
+        assert_eq!(conflicts.len(), 1);
+        assert!(conflicts[0].contains("file:.git/config"));
+        assert!(conflicts[0].contains("url.https://proxy.example/.insteadof"));
+    }
+
+    #[test]
+    fn config_file_identity_ignores_unresolvable_candidates() {
+        let directory = tempfile::tempdir().unwrap();
+        let managed = directory.path().join("gitboost.gitconfig");
+        fs::write(&managed, "").unwrap();
+
+        assert!(!same_config_file(&directory.path().join("missing"), &managed).unwrap());
+        assert!(!same_config_file(Path::new("~/.gitconfig.local"), &managed).unwrap());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn config_file_identity_accepts_windows_case_aliases() {
+        let directory = tempfile::tempdir().unwrap();
+        let managed = directory.path().join("GitBoost.GitConfig");
+        fs::write(&managed, "").unwrap();
+        let case_alias = managed.to_string_lossy().to_ascii_uppercase();
+
+        assert!(same_config_file(Path::new(&case_alias), &managed).unwrap());
+    }
+
+    #[test]
+    fn only_rewrites_that_can_match_github_https_are_conflicts() {
+        assert!(affects_github_https("https://github.com/"));
+        assert!(affects_github_https("https://github.com/openai/"));
+        assert!(affects_github_https("https://"));
+        assert!(!affects_github_https("https://gitlab.com/"));
+        assert!(!affects_github_https("git@github.com:"));
+    }
+
+    #[test]
+    fn redacts_windows_and_unix_home_paths() {
+        assert_eq!(
+            redact_path_with_home(r#"file:C:\Users\zhaoyun\.gitconfig"#, r#"C:\Users\zhaoyun"#,),
+            r#"file:%USERPROFILE%\.gitconfig"#
+        );
+        assert_eq!(
+            redact_path_with_home("file:/Users/zhaoyun/.gitconfig", "/Users/zhaoyun",),
+            "file:~/.gitconfig"
+        );
+    }
+
+    #[test]
+    fn repository_pushurl_check_distinguishes_invalid_paths() {
+        let plain = tempfile::tempdir().unwrap();
+        assert_eq!(
+            explicit_push_url(plain.path()).unwrap_err(),
+            "指定路径不是 Git 仓库"
+        );
+
+        let repository = tempfile::tempdir().unwrap();
+        let path = repository.path().to_string_lossy();
+        let initialized = run_git(
+            ["-C", path.as_ref(), "init", "-q"],
+            None,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert!(initialized.status.success());
+        assert_eq!(explicit_push_url(repository.path()).unwrap(), None);
+
+        let configured = run_git(
+            [
+                "-C",
+                path.as_ref(),
+                "config",
+                "remote.origin.pushurl",
+                "https://user:secret@github.com/openai/codex.git",
+            ],
+            None,
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert!(configured.status.success());
+        let pushurl = explicit_push_url(repository.path()).unwrap().unwrap();
+        assert!(!pushurl.contains("secret"));
     }
 
     #[test]

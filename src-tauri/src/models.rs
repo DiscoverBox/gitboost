@@ -145,6 +145,7 @@ pub struct EnvironmentSummary {
     pub include_registered: bool,
     pub config_path: String,
     pub conflicts: usize,
+    pub conflict_scan_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -190,10 +191,12 @@ pub struct DiagnosticReport {
     pub config_path: String,
     pub include_registered: bool,
     pub conflicts: Vec<String>,
+    pub conflict_scan_error: Option<String>,
     pub original_url: String,
     pub fetch_url: Option<String>,
     pub push_url: Option<String>,
     pub explicit_push_url: Option<String>,
+    pub repository_error: Option<String>,
     pub warnings: Vec<String>,
     pub report_text: String,
 }

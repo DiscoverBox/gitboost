@@ -41,6 +41,7 @@ const browserMock: AppSnapshot = {
     includeRegistered: false,
     configPath: "~/Library/Application Support/pro.gitboost.desktop/gitboost.gitconfig",
     conflicts: 0,
+    conflictScanError: null,
   },
 };
 

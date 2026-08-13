@@ -49,6 +49,7 @@ export interface EnvironmentSummary {
   includeRegistered: boolean;
   configPath: string;
   conflicts: number;
+  conflictScanError: string | null;
 }
 
 export interface AppSnapshot {
@@ -65,10 +66,12 @@ export interface DiagnosticReport {
   configPath: string;
   includeRegistered: boolean;
   conflicts: string[];
+  conflictScanError: string | null;
   originalUrl: string;
   fetchUrl: string | null;
   pushUrl: string | null;
   explicitPushUrl: string | null;
+  repositoryError: string | null;
   warnings: string[];
   reportText: string;
 }
