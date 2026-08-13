@@ -1,4 +1,4 @@
-import type { HealthSummary, NodeEntry, NodeStatus } from "./types";
+import type { HealthSummary, LineMode, NodeEntry, NodeStatus } from "./types";
 
 export const statusLabel: Record<NodeStatus, string> = {
   untested: "未检测",
@@ -25,6 +25,11 @@ export function formatRelativeTime(value: string | null): string {
 
 export function currentNode(nodes: NodeEntry[], id: string | null): NodeEntry | null {
   return nodes.find((node) => node.id === id) ?? null;
+}
+
+export function lineStatusLabel(accelerationEnabled: boolean, lineMode: LineMode): string {
+  if (!accelerationEnabled || lineMode === "direct") return "GitHub";
+  return lineMode === "fixed" ? "固定线路" : "自动线路";
 }
 
 export function successRate(health: HealthSummary): string {

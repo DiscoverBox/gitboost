@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 pub const SCHEMA_VERSION: u32 = 1;
-pub const FASTGIT_ID: &str = "builtin-fastgit";
+pub const FASTGIT_REWRITE_BASE: &str = "https://fastgit.cc/https://github.com/";
 pub const TEST_REPOSITORY: &str = "https://github.com/octocat/Hello-World.git";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,12 +79,13 @@ pub struct NodeDefinition {
     pub built_in: bool,
 }
 
+#[cfg(test)]
 impl NodeDefinition {
     pub fn fastgit() -> Self {
         Self {
-            id: FASTGIT_ID.into(),
+            id: FASTGIT_REWRITE_BASE.into(),
             name: "FastGit".into(),
-            rewrite_base: "https://fastgit.cc/https://github.com/".into(),
+            rewrite_base: FASTGIT_REWRITE_BASE.into(),
             enabled: true,
             built_in: true,
         }

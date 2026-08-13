@@ -10,9 +10,10 @@ test("core desktop workflow is navigable", async ({ page }) => {
   await expect(dragRegion).toBeVisible();
   await expect(dragRegion).toHaveCSS("height", "29px");
 
-  await page.getByRole("button", { name: "节点", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "节点", exact: true })).toBeVisible();
-  await expect(page.getByText("https://fastgit.cc/https://github.com/", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "自定义节点", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "自定义节点", exact: true })).toBeVisible();
+  await expect(page.getByText("1 个，由远程目录和本地缓存自动维护。", { exact: true })).toBeVisible();
+  await expect(page.getByText("https://fastgit.cc/https://github.com/", { exact: true })).toBeHidden();
 
   await page.getByRole("button", { name: "添加节点" }).click();
   await expect(page.getByRole("dialog", { name: "添加节点" })).toBeVisible();
@@ -38,7 +39,7 @@ test("core desktop workflow is navigable", async ({ page }) => {
 
 test("node import keeps failures open and reports actual results", async ({ page }) => {
   await page.goto("/");
-  await page.getByRole("button", { name: "节点", exact: true }).click();
+  await page.getByRole("button", { name: "自定义节点", exact: true }).click();
   await page.getByRole("button", { name: "添加节点" }).click();
 
   await page.evaluate(() => {

@@ -1,20 +1,20 @@
 # GitBoost
 
-GitBoost 是一个 macOS / Windows 桌面工具：用户继续使用原始 `https://github.com/...` 地址，应用通过 Git 原生 URL 重写，把公开仓库的读取临时切到用户选择的外部节点。push 默认保持 GitHub 直连；显式 `pushurl` 会在诊断中告警。
+GitBoost 是一个 macOS / Windows 桌面工具：用户继续使用原始 `https://github.com/...` 地址，应用通过 Git 原生 URL 重写，把公开仓库的读取临时切到本机自动选择的加速线路。push 默认保持 GitHub 直连；显式 `pushurl` 会在诊断中告警。
 
 当前交付支持 Apple Silicon（arm64）macOS，以及 64 位 Windows 10/11（x86_64）。macOS 不构建 Intel 或 Universal 版本。
 
 ## 当前实现
 
 - Tauri 2 + Rust 核心，React + TypeScript 界面。
-- 预置 `https://fastgit.cc/https://github.com/`，首次状态为“未检测”。
-- 粘贴 / JSON 导入、规范化、去重、凭据与查询参数拒绝。
-- 隔离的 `git ls-remote` 双次检测、失败分类、有限健康历史与自动选路。
+- 从官方静态 URL 列表更新系统节点，本地保留 Last Known Good 缓存；远程不可用不影响已有线路。
+- 系统节点与用户自定义节点合并后统一规范化、去重和检测；凭据、查询参数与片段会被拒绝。
+- 隔离的 `git ls-remote` 双次检测、最多 4 路并发、全量任务互斥、失败分类、有限健康历史与自动选路。
 - 全局加速 / 基于 URL 前缀的仅加速清单、公开仓库清单、固定节点与直连模式。
 - GitHub Release 文件地址校验、节点小流量探测和浏览器下载。
 - 独立 `gitboost.gitconfig`、候选配置验证、原子替换、精确 include 注册与恢复。
 - Git 冲突、有效 fetch/push 地址、显式 `pushurl` 的脱敏诊断。
-- 基于 Git Trace2 Unix Stream Socket 的实际连接日志，区分 FastGit、GitHub 直连和其他重写；不落盘原始参数或凭据。
+- 基于 Git Trace2 Unix Stream Socket 的实际连接日志，区分加速线路、GitHub 直连和其他重写；不落盘原始参数或凭据。
 - macOS / Windows 托盘控制、定时健康检查、登录时启动。
 
 ## 路由清单的匹配边界
@@ -53,6 +53,8 @@ npm run build:windows
 
 Windows 需要先安装 Git for Windows。安装包默认按当前用户安装；WebView2 缺失时由安装器静默引导安装。产物位于 `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/`。
 
-数据保存在系统的应用数据目录 `pro.gitboost.desktop` 下。恢复操作只删除 GitBoost 自己注册的 `include.path` 并清空自己的重写规则，不修改任何仓库的 remote。
+系统节点目录源文件为仓库根目录的 `nodes.json`，发布地址为 `https://cdn.jsdelivr.net/gh/DiscoverBox/gitboost@main/nodes.json`。文件只包含代理 URL 字符串，不包含 ID、名称、类型或转换规则。
+
+数据保存在系统的应用数据目录 `pro.gitboost.desktop` 下。`system-nodes.json` 保存最近一次有效的系统节点目录，`nodes.json` 只保存用户自定义节点。恢复操作只删除 GitBoost 自己注册的 `include.path` 并清空自己的重写规则，不修改任何仓库的 remote。
 
 “使用日志”要求 GitBoost 正在运行，只保留最近 7 天的脱敏记录。应用退出后加速配置仍然有效，但没有本地 Socket 接收 Trace2 事件，因此退出期间的 Git 操作不会补记；Socket 不可用不会阻断 Git 命令。

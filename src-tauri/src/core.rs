@@ -17,16 +17,30 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, Ordering},
+    process::Command,
+    sync::atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use tempfile::NamedTempFile;
 use uuid::Uuid;
+
+const SYSTEM_NODE_CATALOG_URL: &str =
+    "https://cdn.jsdelivr.net/gh/DiscoverBox/gitboost@main/nodes.json";
+const MAX_SYSTEM_NODES: usize = 100;
+const CATALOG_MAX_BYTES: &str = "262144";
+const CATALOG_TIMEOUT_SECONDS: &str = "10";
+const NODE_TEST_CONCURRENCY: usize = 4;
 
 #[derive(Debug)]
 pub struct AppCore {
     paths: AppPaths,
     lock: Mutex<()>,
+    full_node_test_lock: Mutex<()>,
     usage_listening: AtomicBool,
+}
+
+struct CatalogUpdate {
+    changed: bool,
+    recovery_applied_at: Option<chrono::DateTime<Utc>>,
 }
 
 #[derive(Debug)]
@@ -34,6 +48,7 @@ struct AppPaths {
     root: PathBuf,
     settings: PathBuf,
     nodes: PathBuf,
+    system_nodes: PathBuf,
     health: PathBuf,
     routes: PathBuf,
     gitconfig: PathBuf,
@@ -47,6 +62,7 @@ impl AppCore {
         let paths = AppPaths {
             settings: root.join("settings.json"),
             nodes: root.join("nodes.json"),
+            system_nodes: root.join("system-nodes.json"),
             health: root.join("health.json"),
             routes: root.join("routes.json"),
             gitconfig: root.join("gitboost.gitconfig"),
@@ -61,6 +77,7 @@ impl AppCore {
         let core = Self {
             paths,
             lock: Mutex::new(()),
+            full_node_test_lock: Mutex::new(()),
             usage_listening: AtomicBool::new(false),
         };
         core.initialize()?;
@@ -71,9 +88,7 @@ impl AppCore {
         if !self.paths.settings.exists() {
             atomic_write_json(&self.paths.settings, &Settings::default())?;
         }
-        if !self.paths.nodes.exists() {
-            atomic_write_json(&self.paths.nodes, &vec![NodeDefinition::fastgit()])?;
-        }
+        self.initialize_node_files()?;
         if !self.paths.health.exists() {
             atomic_write_json(&self.paths.health, &HashMap::<String, HealthSummary>::new())?;
         }
@@ -89,11 +104,42 @@ impl AppCore {
         Ok(())
     }
 
+    fn initialize_node_files(&self) -> Result<(), String> {
+        if !self.paths.nodes.exists() {
+            atomic_write_json(&self.paths.nodes, &Vec::<NodeDefinition>::new())?;
+        }
+        if !self.paths.system_nodes.exists() {
+            atomic_write_json(
+                &self.paths.system_nodes,
+                &vec![FASTGIT_REWRITE_BASE.to_string()],
+            )?;
+        }
+        Ok(())
+    }
+
     fn settings(&self) -> Result<Settings, String> {
         load_json(&self.paths.settings)
     }
-    fn nodes(&self) -> Result<Vec<NodeDefinition>, String> {
+    fn custom_nodes(&self) -> Result<Vec<NodeDefinition>, String> {
         load_json(&self.paths.nodes)
+    }
+    fn nodes(&self) -> Result<Vec<NodeDefinition>, String> {
+        let mut nodes = self.custom_nodes()?;
+        let mut known: HashSet<String> =
+            nodes.iter().map(|node| node.rewrite_base.clone()).collect();
+        let system_urls: Vec<String> = load_json(&self.paths.system_nodes)?;
+        for rewrite_base in normalize_system_urls(system_urls)? {
+            if known.insert(rewrite_base.clone()) {
+                nodes.push(NodeDefinition {
+                    id: rewrite_base.clone(),
+                    name: default_node_name(&rewrite_base),
+                    rewrite_base,
+                    enabled: true,
+                    built_in: true,
+                });
+            }
+        }
+        Ok(nodes)
     }
     fn health(&self) -> Result<HashMap<String, HealthSummary>, String> {
         load_json(&self.paths.health)
@@ -104,6 +150,98 @@ impl AppCore {
 
     pub fn trace_socket_path(&self) -> PathBuf {
         self.paths.trace_socket.clone()
+    }
+
+    pub fn refresh_system_nodes(&self) -> Result<bool, String> {
+        let update = fetch_system_catalog().and_then(|output| self.apply_system_catalog(&output));
+        let wait = update.as_ref().is_ok_and(|update| update.changed);
+        let Some(_run) = self.acquire_full_node_test(wait) else {
+            return update.map(|update| update.changed);
+        };
+        let tested = self.test_all_nodes_locked();
+        let update = update?;
+        tested?;
+        if let Some(applied_at) = update.recovery_applied_at.as_ref() {
+            self.resume_acceleration_after_catalog_refresh(applied_at)?;
+        }
+        Ok(update.changed)
+    }
+
+    fn acquire_full_node_test(&self, wait: bool) -> Option<parking_lot::MutexGuard<'_, ()>> {
+        if wait {
+            Some(self.full_node_test_lock.lock())
+        } else {
+            self.full_node_test_lock.try_lock()
+        }
+    }
+
+    fn apply_system_catalog(&self, output: &[u8]) -> Result<CatalogUpdate, String> {
+        let urls = parse_system_catalog(output)?;
+        let _guard = self.lock.lock();
+        let current: Vec<String> = load_json(&self.paths.system_nodes)?;
+        if current == urls {
+            return Ok(CatalogUpdate {
+                changed: false,
+                recovery_applied_at: None,
+            });
+        }
+        let mut available_ids: HashSet<String> = self
+            .custom_nodes()?
+            .into_iter()
+            .map(|node| node.id)
+            .collect();
+        available_ids.extend(urls.iter().cloned());
+        let mut settings = self.settings()?;
+        let original_settings = settings.clone();
+        let mut settings_changed = false;
+        if settings
+            .fixed_node_id
+            .as_ref()
+            .is_some_and(|id| !available_ids.contains(id))
+        {
+            settings.fixed_node_id = None;
+            settings.line_mode = LineMode::Automatic;
+            settings_changed = true;
+        }
+        let current_removed = settings
+            .current_node_id
+            .as_ref()
+            .is_some_and(|id| !available_ids.contains(id));
+        if current_removed {
+            settings.current_node_id = None;
+            settings_changed = true;
+        }
+        let should_resume = current_removed && settings.acceleration_enabled;
+        if should_resume {
+            settings.acceleration_enabled = false;
+            settings.line_mode = LineMode::Direct;
+            self.write_configuration(&mut settings, &[], &[])?;
+        }
+        atomic_write_json(&self.paths.system_nodes, &urls)?;
+        if settings_changed {
+            if let Err(error) = atomic_write_json(&self.paths.settings, &settings) {
+                let _ = atomic_write_json(&self.paths.settings, &original_settings);
+                let _ = atomic_write_json(&self.paths.system_nodes, &current);
+                return Err(error);
+            }
+        }
+        let _ = append_log(
+            &self.paths.logs,
+            "INFO",
+            &format!("system node catalog refreshed: nodes={}", urls.len()),
+        );
+        Ok(CatalogUpdate {
+            changed: true,
+            recovery_applied_at: if should_resume {
+                settings.last_applied_at
+            } else {
+                None
+            },
+        })
+    }
+
+    pub fn system_node_refresh_failed(&self, message: &str) {
+        let _ = append_log(&self.paths.logs, "ERROR", message);
     }
 
     pub fn set_usage_listening(&self, listening: bool) {
@@ -184,9 +322,12 @@ impl AppCore {
         if items.len() > 1_000 {
             return Err("单次最多导入 1000 个节点".into());
         }
-        let mut nodes = self.nodes()?;
-        let mut known: HashSet<String> =
-            nodes.iter().map(|node| node.rewrite_base.clone()).collect();
+        let mut nodes = self.custom_nodes()?;
+        let mut known: HashSet<String> = self
+            .nodes()?
+            .iter()
+            .map(|node| node.rewrite_base.clone())
+            .collect();
         let mut imported = 0;
         let mut duplicates = 0;
         let mut rejected = vec![];
@@ -254,7 +395,7 @@ impl AppCore {
             name: &'a str,
             rewrite_base: &'a str,
         }
-        let nodes = self.nodes()?;
+        let nodes = self.custom_nodes()?;
         let value = Export {
             schema_version: SCHEMA_VERSION,
             nodes: nodes
@@ -297,22 +438,58 @@ impl AppCore {
     }
 
     pub fn test_all_nodes(&self) -> Result<Vec<NodeEntry>, String> {
-        let nodes = self.nodes()?;
+        let _run = self
+            .full_node_test_lock
+            .try_lock()
+            .ok_or_else(|| "全量线路检测正在进行，请稍后再试".to_string())?;
+        self.test_all_nodes_locked()
+    }
+
+    fn test_all_nodes_locked(&self) -> Result<Vec<NodeEntry>, String> {
+        let nodes: Vec<NodeDefinition> = self
+            .nodes()?
+            .into_iter()
+            .filter(|node| node.enabled)
+            .collect();
         let old_health = self.health()?;
-        let mut next_health = old_health.clone();
-        for node in nodes.iter().filter(|node| node.enabled) {
-            let tested = git::test_node(
-                node,
-                old_health
-                    .get(&node.id)
-                    .unwrap_or(&HealthSummary::default()),
-            );
-            next_health.insert(node.id.clone(), tested);
-        }
+        let tested = test_nodes_bounded(&nodes, &old_health, git::test_node)?;
         let _guard = self.lock.lock();
+        let mut next_health = self.health()?;
+        for (node_id, summary) in tested {
+            let is_newer = next_health
+                .get(&node_id)
+                .is_none_or(|existing| existing.checked_at <= summary.checked_at);
+            if is_newer {
+                next_health.insert(node_id, summary);
+            }
+        }
         atomic_write_json(&self.paths.health, &next_health)?;
         self.reselect_after_health_change()?;
         self.node_entries()
+    }
+
+    fn resume_acceleration_after_catalog_refresh(
+        &self,
+        expected_applied_at: &chrono::DateTime<Utc>,
+    ) -> Result<(), String> {
+        let _guard = self.lock.lock();
+        let mut settings = self.settings()?;
+        if settings.acceleration_enabled
+            || settings.line_mode != LineMode::Direct
+            || settings.last_applied_at.as_ref() != Some(expected_applied_at)
+        {
+            return Ok(());
+        }
+        let pairs = self.node_pairs()?;
+        let Some(node) = git::choose_node(&pairs) else {
+            return Ok(());
+        };
+        settings.line_mode = LineMode::Automatic;
+        settings.fixed_node_id = None;
+        settings.current_node_id = Some(node.id.clone());
+        settings.acceleration_enabled = true;
+        self.write_configuration(&mut settings, &pairs, &self.routes()?)?;
+        atomic_write_json(&self.paths.settings, &settings)
     }
 
     fn reselect_after_health_change(&self) -> Result<(), String> {
@@ -322,6 +499,7 @@ impl AppCore {
             settings.current_node_id = git::choose_node(&pairs).map(|node| node.id.clone());
             if settings.acceleration_enabled && settings.current_node_id.is_none() {
                 settings.line_mode = LineMode::Direct;
+                settings.acceleration_enabled = false;
                 self.write_configuration(&mut settings, &pairs, &self.routes()?)?;
             } else if settings.acceleration_enabled {
                 self.write_configuration(&mut settings, &pairs, &self.routes()?)?;
@@ -349,7 +527,7 @@ impl AppCore {
             return Err("节点名称需为 1–80 个字符".into());
         }
         let _guard = self.lock.lock();
-        let mut nodes = self.nodes()?;
+        let mut nodes = self.custom_nodes()?;
         let node = nodes
             .iter_mut()
             .find(|node| node.id == node_id)
@@ -361,7 +539,7 @@ impl AppCore {
 
     pub fn set_node_enabled(&self, node_id: &str, enabled: bool) -> Result<AppSnapshot, String> {
         let _guard = self.lock.lock();
-        let mut nodes = self.nodes()?;
+        let mut nodes = self.custom_nodes()?;
         let node = nodes
             .iter_mut()
             .find(|node| node.id == node_id)
@@ -375,13 +553,9 @@ impl AppCore {
 
     pub fn delete_node(&self, node_id: &str) -> Result<AppSnapshot, String> {
         let _guard = self.lock.lock();
-        let mut nodes = self.nodes()?;
-        let node = nodes
-            .iter()
-            .find(|node| node.id == node_id)
-            .ok_or_else(|| "节点不存在".to_string())?;
-        if node.built_in {
-            return Err("预置节点不可删除，可以停用".into());
+        let mut nodes = self.custom_nodes()?;
+        if !nodes.iter().any(|node| node.id == node_id) {
+            return Err("节点不存在".into());
         }
         nodes.retain(|node| node.id != node_id);
         let mut health = self.health()?;
@@ -908,6 +1082,119 @@ fn redact_import(input: &str) -> String {
     }
 }
 
+fn test_nodes_bounded<F>(
+    nodes: &[NodeDefinition],
+    old_health: &HashMap<String, HealthSummary>,
+    test: F,
+) -> Result<Vec<(String, HealthSummary)>, String>
+where
+    F: Fn(&NodeDefinition, &HealthSummary) -> HealthSummary + Sync,
+{
+    let next = AtomicUsize::new(0);
+    let tested = Mutex::new(Vec::with_capacity(nodes.len()));
+    std::thread::scope(|scope| {
+        let handles: Vec<_> = (0..NODE_TEST_CONCURRENCY.min(nodes.len()))
+            .map(|_| {
+                let next = &next;
+                let tested = &tested;
+                let test = &test;
+                scope.spawn(move || loop {
+                    let index = next.fetch_add(1, Ordering::Relaxed);
+                    let Some(node) = nodes.get(index) else {
+                        break;
+                    };
+                    let previous = old_health.get(&node.id).cloned().unwrap_or_default();
+                    let summary = test(node, &previous);
+                    tested.lock().push((index, node.id.clone(), summary));
+                })
+            })
+            .collect();
+        for handle in handles {
+            handle
+                .join()
+                .map_err(|_| "节点检测线程异常结束".to_string())?;
+        }
+        Ok::<(), String>(())
+    })?;
+    let mut tested = tested.into_inner();
+    tested.sort_by_key(|(index, _, _)| *index);
+    let tested = tested
+        .into_iter()
+        .map(|(_, node_id, summary)| (node_id, summary))
+        .collect();
+    Ok(tested)
+}
+
+fn normalize_system_urls(urls: Vec<String>) -> Result<Vec<String>, String> {
+    if urls.is_empty() {
+        return Err("系统节点目录不能为空".into());
+    }
+    if urls.len() > MAX_SYSTEM_NODES {
+        return Err(format!("系统节点目录最多包含 {MAX_SYSTEM_NODES} 个地址"));
+    }
+    let mut normalized = Vec::with_capacity(urls.len());
+    let mut known = HashSet::new();
+    for input in urls {
+        let url = normalize_rewrite_base(&input)
+            .map_err(|reason| format!("系统节点地址无效：{reason}"))?;
+        if known.insert(url.clone()) {
+            normalized.push(url);
+        }
+    }
+    if normalized.is_empty() {
+        return Err("系统节点目录没有有效地址".into());
+    }
+    Ok(normalized)
+}
+
+fn parse_system_catalog(bytes: &[u8]) -> Result<Vec<String>, String> {
+    let urls: Vec<String> =
+        serde_json::from_slice(bytes).map_err(|error| format!("系统节点目录格式错误：{error}"))?;
+    normalize_system_urls(urls)
+}
+
+fn fetch_system_catalog() -> Result<Vec<u8>, String> {
+    let mut command = Command::new("curl");
+    command.args([
+        "--location",
+        "--silent",
+        "--show-error",
+        "--fail",
+        "--proto",
+        "=https",
+        "--proto-redir",
+        "=https",
+        "--connect-timeout",
+        "4",
+        "--max-time",
+        CATALOG_TIMEOUT_SECONDS,
+        "--max-filesize",
+        CATALOG_MAX_BYTES,
+        SYSTEM_NODE_CATALOG_URL,
+    ]);
+    hide_catalog_console(&mut command);
+    let output = command
+        .output()
+        .map_err(|error| format!("无法更新系统节点：{error}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "无法更新系统节点：{}",
+            detail.lines().next().unwrap_or("请求失败")
+        ));
+    }
+    Ok(output.stdout)
+}
+
+#[cfg(target_os = "windows")]
+fn hide_catalog_console(command: &mut Command) {
+    use std::os::windows::process::CommandExt;
+    command.creation_flags(0x0800_0000);
+}
+
+#[cfg(not(target_os = "windows"))]
+fn hide_catalog_console(_command: &mut Command) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -923,6 +1210,203 @@ mod tests {
         );
         assert_eq!(snapshot.settings.route_scope, RouteScope::Allowlist);
         assert!(!snapshot.settings.acceleration_enabled);
+        assert!(snapshot.nodes[0].node.built_in);
+        assert_eq!(snapshot.nodes[0].node.id, FASTGIT_REWRITE_BASE);
+        let cached: Vec<String> = load_json(&directory.path().join("system-nodes.json")).unwrap();
+        assert_eq!(cached, vec![FASTGIT_REWRITE_BASE]);
+    }
+
+    #[test]
+    fn system_catalog_is_a_normalized_url_array() {
+        let urls = parse_system_catalog(
+            br#"["https://fastgit.cc", "https://fastgit.cc/https://github.com/"]"#,
+        )
+        .unwrap();
+        assert_eq!(urls, vec![FASTGIT_REWRITE_BASE]);
+        assert!(parse_system_catalog(br#"[]"#).is_err());
+        assert!(parse_system_catalog(br#"["http://proxy.example"]"#).is_err());
+        assert!(parse_system_catalog(br#"{"nodes":[]}"#).is_err());
+        assert_eq!(
+            parse_system_catalog(include_bytes!("../../nodes.json")).unwrap(),
+            vec![FASTGIT_REWRITE_BASE]
+        );
+    }
+
+    #[test]
+    fn removing_current_system_node_immediately_writes_direct_git_config() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let settings = Settings {
+            acceleration_enabled: true,
+            route_scope: RouteScope::Global,
+            line_mode: LineMode::Fixed,
+            fixed_node_id: Some(FASTGIT_REWRITE_BASE.into()),
+            current_node_id: Some(FASTGIT_REWRITE_BASE.into()),
+            ..Settings::default()
+        };
+        atomic_write_json(&core.paths.settings, &settings).unwrap();
+        let accelerated = git::build_config(
+            &settings,
+            Some(&NodeDefinition::fastgit()),
+            &[],
+            Some(&core.paths.trace_socket),
+        )
+        .unwrap();
+        atomic_write(&core.paths.gitconfig, accelerated.as_bytes()).unwrap();
+        assert!(accelerated.contains(FASTGIT_REWRITE_BASE));
+
+        let update = core
+            .apply_system_catalog(br#"["https://proxy.example"]"#)
+            .unwrap();
+        assert!(update.changed);
+        assert!(update.recovery_applied_at.is_some());
+
+        let gitconfig = fs::read_to_string(&core.paths.gitconfig).unwrap();
+        assert!(!gitconfig.contains(FASTGIT_REWRITE_BASE));
+        assert!(gitconfig.contains("Acceleration is disabled; GitHub remains direct."));
+        let (fetch, push) = git::effective_urls(&core.paths.gitconfig, TEST_REPOSITORY).unwrap();
+        assert_eq!(fetch, TEST_REPOSITORY);
+        assert_eq!(push, TEST_REPOSITORY);
+        let persisted = core.settings().unwrap();
+        assert!(!persisted.acceleration_enabled);
+        assert_eq!(persisted.line_mode, LineMode::Direct);
+        assert!(persisted.fixed_node_id.is_none());
+        assert!(persisted.current_node_id.is_none());
+
+        drop(core);
+        let restarted = AppCore::new(directory.path().to_path_buf()).unwrap();
+        restarted.refresh_registered_configuration().unwrap();
+        assert_eq!(restarted.settings().unwrap().line_mode, LineMode::Direct);
+    }
+
+    #[test]
+    fn full_node_tests_allow_only_one_active_run() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+
+        let active = core.full_node_test_lock.lock();
+        assert_eq!(
+            core.test_all_nodes().err().as_deref(),
+            Some("全量线路检测正在进行，请稍后再试")
+        );
+        drop(active);
+        assert!(core.full_node_test_lock.try_lock().is_some());
+    }
+
+    #[test]
+    fn catalog_refresh_waits_for_the_active_full_node_test() {
+        use std::{sync::mpsc, time::Duration};
+
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let active = core.full_node_test_lock.lock();
+        let (waiting, wait_started) = mpsc::channel();
+        let (acquired, slot_acquired) = mpsc::channel();
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                waiting.send(()).unwrap();
+                let _slot = core.acquire_full_node_test(true).unwrap();
+                acquired.send(()).unwrap();
+            });
+            wait_started.recv().unwrap();
+            assert!(slot_acquired
+                .recv_timeout(Duration::from_millis(30))
+                .is_err());
+            drop(active);
+            slot_acquired.recv_timeout(Duration::from_secs(1)).unwrap();
+        });
+    }
+
+    #[test]
+    fn unchanged_catalog_does_not_queue_behind_an_active_test() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let _active = core.full_node_test_lock.lock();
+
+        assert!(core.acquire_full_node_test(false).is_none());
+    }
+
+    #[test]
+    fn catalog_recovery_does_not_override_a_newer_user_choice() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let settings = Settings {
+            acceleration_enabled: true,
+            route_scope: RouteScope::Global,
+            line_mode: LineMode::Fixed,
+            fixed_node_id: Some(FASTGIT_REWRITE_BASE.into()),
+            current_node_id: Some(FASTGIT_REWRITE_BASE.into()),
+            ..Settings::default()
+        };
+        atomic_write_json(&core.paths.settings, &settings).unwrap();
+        let accelerated = git::build_config(
+            &settings,
+            Some(&NodeDefinition::fastgit()),
+            &[],
+            Some(&core.paths.trace_socket),
+        )
+        .unwrap();
+        atomic_write(&core.paths.gitconfig, accelerated.as_bytes()).unwrap();
+        let update = core
+            .apply_system_catalog(br#"["https://proxy.example"]"#)
+            .unwrap();
+        let recovery_applied_at = update.recovery_applied_at.unwrap();
+
+        let mut user_settings = core.settings().unwrap();
+        user_settings.last_applied_at = Some(recovery_applied_at + chrono::Duration::seconds(1));
+        atomic_write_json(&core.paths.settings, &user_settings).unwrap();
+        let mut health = core.health().unwrap();
+        health.insert(
+            "https://proxy.example/https://github.com/".into(),
+            HealthSummary {
+                status: NodeStatus::Available,
+                success_count: 1,
+                attempt_count: 1,
+                ..HealthSummary::default()
+            },
+        );
+        atomic_write_json(&core.paths.health, &health).unwrap();
+
+        core.resume_acceleration_after_catalog_refresh(&recovery_applied_at)
+            .unwrap();
+
+        let persisted = core.settings().unwrap();
+        assert!(!persisted.acceleration_enabled);
+        assert_eq!(persisted.line_mode, LineMode::Direct);
+        assert!(persisted.current_node_id.is_none());
+    }
+
+    #[test]
+    fn node_tests_use_four_workers_at_most() {
+        use std::{
+            sync::atomic::{AtomicUsize, Ordering},
+            time::Duration,
+        };
+
+        let nodes: Vec<NodeDefinition> = (0..8)
+            .map(|index| NodeDefinition {
+                id: format!("node-{index}"),
+                name: format!("Node {index}"),
+                rewrite_base: format!("https://proxy-{index}.example/https://github.com/"),
+                enabled: true,
+                built_in: true,
+            })
+            .collect();
+        let active = AtomicUsize::new(0);
+        let maximum = AtomicUsize::new(0);
+
+        let tested = test_nodes_bounded(&nodes, &HashMap::new(), |_, _| {
+            let running = active.fetch_add(1, Ordering::SeqCst) + 1;
+            maximum.fetch_max(running, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(30));
+            active.fetch_sub(1, Ordering::SeqCst);
+            HealthSummary::default()
+        })
+        .unwrap();
+
+        assert_eq!(tested.len(), 8);
+        assert_eq!(maximum.load(Ordering::SeqCst), NODE_TEST_CONCURRENCY);
     }
 
     #[test]
@@ -964,7 +1448,7 @@ mod tests {
                 "https://github.com/ollama/ollama/releases/download/v1/OllamaSetup.exe",
             )
             .unwrap();
-        assert_eq!(target.node_name, "FastGit");
+        assert_eq!(target.node_name, "fastgit.cc");
         assert_eq!(
             target.accelerated_url,
             "https://fastgit.cc/https://github.com/ollama/ollama/releases/download/v1/OllamaSetup.exe"

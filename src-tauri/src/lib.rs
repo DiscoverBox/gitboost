@@ -242,14 +242,12 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
                         } else {
                             "开启加速"
                         });
-                        let node = state
-                            .settings
-                            .current_node_id
-                            .as_ref()
-                            .and_then(|id| state.nodes.iter().find(|node| &node.node.id == id))
-                            .map(|node| node.node.name.as_str())
-                            .unwrap_or("GitHub 直连");
-                        let _ = status_item.set_text(format!("当前线路：{node}"));
+                        let status = if state.settings.acceleration_enabled {
+                            "GitHub 加速"
+                        } else {
+                            "GitHub 直连"
+                        };
+                        let _ = status_item.set_text(format!("当前线路：{status}"));
                         let _ = app.emit("snapshot-updated", state);
                     }
                     Err(error) => {
@@ -310,6 +308,25 @@ fn start_health_monitor(app: tauri::AppHandle) {
     });
 }
 
+fn start_system_node_monitor(app: tauri::AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let handle = app.clone();
+            let _ = tauri::async_runtime::spawn_blocking(move || {
+                let core = handle.state::<AppCore>();
+                if let Err(error) = core.refresh_system_nodes() {
+                    core.system_node_refresh_failed(&error);
+                }
+                if let Ok(state) = core.snapshot() {
+                    let _ = handle.emit("snapshot-updated", state);
+                }
+            })
+            .await;
+            tokio::time::sleep(Duration::from_secs(6 * 60 * 60)).await;
+        }
+    });
+}
+
 pub fn run() {
     let autostart = tauri_plugin_autostart::Builder::new();
     #[cfg(target_os = "macos")]
@@ -331,6 +348,7 @@ pub fn run() {
                 .refresh_registered_configuration()
                 .map_err(|error| format!("无法升级 GitBoost 配置：{error}"))?;
             install_tray(app)?;
+            start_system_node_monitor(app.handle().clone());
             start_health_monitor(app.handle().clone());
             Ok(())
         })

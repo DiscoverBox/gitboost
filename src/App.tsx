@@ -4,11 +4,11 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
 import { api, getSnapshot } from "./api";
 import type { AppSnapshot, DiagnosticReport, DownloadTarget, ImportResult, LineMode, NodeEntry, PageKey, RouteScope, UsageLogSnapshot } from "./types";
-import { currentNode, formatLatency, formatRelativeTime, statusLabel, statusTone, successRate } from "./utils";
+import { currentNode, formatLatency, formatRelativeTime, lineStatusLabel, statusLabel, statusTone, successRate } from "./utils";
 
 const navItems: { key: PageKey; label: string }[] = [
   { key: "overview", label: "总览" },
-  { key: "nodes", label: "节点" },
+  { key: "nodes", label: "自定义节点" },
   { key: "routes", label: "路由清单" },
   { key: "downloads", label: "文件下载" },
   { key: "usage", label: "使用日志" },
@@ -124,7 +124,6 @@ export default function App() {
 
   if (!snapshot) return <div className="splash"><div className="wordmark">GitBoost</div><p>正在读取 Git 环境…</p></div>;
 
-  const selected = currentNode(snapshot.nodes, snapshot.settings.currentNodeId);
   return (
     <div className={`app-shell ${usesNativeTitleBar ? "app-shell--native-titlebar" : ""}`}>
       {!usesNativeTitleBar && <div className="window-drag" data-tauri-drag-region />}
@@ -138,7 +137,7 @@ export default function App() {
         </nav>
         <div className="sidebar-status">
           <div className="line-glyph" data-on={snapshot.settings.accelerationEnabled}><span /><span /><span /></div>
-          <div><strong>{snapshot.settings.accelerationEnabled ? "加速已开启" : "当前为直连"}</strong><small>{selected?.name ?? "GitHub"}</small></div>
+          <div><strong>{snapshot.settings.accelerationEnabled ? "加速已开启" : "当前为直连"}</strong><small>{lineStatusLabel(snapshot.settings.accelerationEnabled, snapshot.settings.lineMode)}</small></div>
         </div>
       </aside>
       <main className="main-content">
@@ -161,6 +160,11 @@ type Runner = <T>(key: string, operation: () => Promise<T>, message?: string | (
 function Overview({ snapshot, busy, run, go }: { snapshot: AppSnapshot; busy: string | null; run: Runner; go: (page: PageKey) => void }) {
   const node = currentNode(snapshot.nodes, snapshot.settings.currentNodeId);
   const usable = snapshot.nodes.filter((item) => item.enabled && ["available", "slow"].includes(item.health.status));
+  const lineModeOptions: { value: LineMode; label: string }[] = [
+    { value: "automatic", label: "自动选择" },
+    ...(snapshot.settings.lineMode === "fixed" ? [{ value: "fixed" as const, label: "固定节点" }] : []),
+    { value: "direct", label: "直连" },
+  ];
   const toggle = () => run("toggle", () => api.setAcceleration(!snapshot.settings.accelerationEnabled), snapshot.settings.accelerationEnabled ? "已恢复 GitHub 直连" : "加速配置已写入并验证").catch(() => undefined);
   return (
     <div className="page">
@@ -174,20 +178,20 @@ function Overview({ snapshot, busy, run, go }: { snapshot: AppSnapshot; busy: st
         <dl className="status-facts">
           <div><dt>路由范围</dt><dd>{snapshot.settings.routeScope === "allowlist" ? "仅加速清单" : "全局加速"}</dd></div>
           <div><dt>线路模式</dt><dd>{snapshot.settings.lineMode === "automatic" ? "自动选择" : snapshot.settings.lineMode === "fixed" ? "固定节点" : "GitHub 直连"}</dd></div>
-          <div><dt>当前节点</dt><dd>{node?.name ?? "—"}</dd></div>
-          <div><dt>最近检测</dt><dd>{node ? `${statusLabel[node.health.status]} · ${formatLatency(node.health.medianLatencyMs)}` : "尚未选路"}</dd></div>
+          <div><dt>连接质量</dt><dd>{node ? `${statusLabel[node.health.status]} · ${formatLatency(node.health.medianLatencyMs)}` : "尚未选路"}</dd></div>
+          <div><dt>最近检测</dt><dd>{node ? formatRelativeTime(node.health.checkedAt) : "尚未检测"}</dd></div>
         </dl>
       </section>
 
       {!snapshot.environment.gitAvailable && <div className="notice notice--danger"><strong>未检测到系统 Git</strong><p>请先安装 Git（Windows 推荐 Git for Windows），然后再开启加速。</p></div>}
       {snapshot.environment.conflictScanError ? <div className="notice notice--danger"><strong>URL 重写冲突检查失败</strong><p>{snapshot.environment.conflictScanError}</p><Button tone="quiet" onClick={() => go("diagnostics")}>查看诊断</Button></div> : snapshot.environment.conflicts > 0 && <div className="notice notice--warning"><strong>发现 {snapshot.environment.conflicts} 条 URL 重写冲突</strong><p>GitBoost 不会覆盖它们。请先到环境诊断查看来源。</p><Button tone="quiet" onClick={() => go("diagnostics")}>查看诊断</Button></div>}
-      {!usable.length && <div className="notice"><strong>还没有通过验证的节点</strong><p>预置节点不会被默认信任。先执行真实 Git 检测，再开启加速。</p><Button tone="quiet" onClick={() => go("nodes")}>去检测节点</Button></div>}
+      {!usable.length && <div className="notice"><strong>还没有通过验证的线路</strong><p>系统线路和自定义节点都必须先通过真实 Git 检测。</p><Button tone="quiet" busy={busy === "test-all"} onClick={() => run("test-all", api.testAllNodes, "线路检测完成").catch(() => undefined)}>立即检测</Button></div>}
 
       <section className="section-block">
         <div className="section-title"><div><h2>线路控制</h2><p>切换只影响下一次 Git 操作；已开始的 clone 需要手动重试。</p></div><Button busy={busy === "test-all"} onClick={() => run("test-all", api.testAllNodes, "节点检测完成").catch(() => undefined)}>重新测速</Button></div>
         <div className="control-row">
           <label>线路模式</label>
-          <Segmented<LineMode> value={snapshot.settings.lineMode} options={[{ value: "automatic", label: "自动选择" }, { value: "fixed", label: "固定节点" }, { value: "direct", label: "直连" }]} onChange={(mode) => run("line-mode", () => api.setLineMode(mode, mode === "fixed" ? usable[0]?.id : null), "线路模式已更新").catch(() => undefined)} />
+          <Segmented<LineMode> value={snapshot.settings.lineMode} options={lineModeOptions} onChange={(mode) => run("line-mode", () => api.setLineMode(mode, mode === "fixed" ? snapshot.settings.fixedNodeId : null), "线路模式已更新").catch(() => undefined)} />
         </div>
       </section>
 
@@ -198,12 +202,15 @@ function Overview({ snapshot, busy, run, go }: { snapshot: AppSnapshot; busy: st
 
 function Nodes({ snapshot, busy, run, onImport }: { snapshot: AppSnapshot; busy: string | null; run: Runner; onImport: () => void }) {
   const [editing, setEditing] = useState<NodeEntry | null>(null);
+  const customNodes = snapshot.nodes.filter((node) => !node.builtIn);
+  const systemCount = snapshot.nodes.length - customNodes.length;
   return (
     <div className="page">
-      <PageHeader eyebrow="外部线路" title="节点" description="使用真实 git ls-remote 检测 Smart HTTP 能力；网页可打开不代表节点可用于 clone。" actions={<><Button onClick={onImport}>添加节点</Button><Button tone="primary" busy={busy === "test-all"} onClick={() => run("test-all", api.testAllNodes, "全部节点检测完成").catch(() => undefined)}>检测全部</Button></>} />
+      <PageHeader eyebrow="可选线路" title="自定义节点" description="系统线路由 GitBoost 自动维护；这里只管理你手工添加的代理地址。" actions={<><Button onClick={onImport}>添加节点</Button><Button tone="primary" busy={busy === "test-all"} onClick={() => run("test-all", api.testAllNodes, "全部线路检测完成").catch(() => undefined)}>检测全部线路</Button></>} />
+      <div className="inline-explainer"><strong>系统线路</strong><span>{systemCount} 个，由远程目录和本地缓存自动维护。</span><span>所有线路都会经过本机 git ls-remote 检测后再参与选择。</span></div>
       <section className="table-shell">
         <div className="table-head node-grid"><span>节点</span><span>状态</span><span>成功率</span><span>中位耗时</span><span>最近检测</span><span /></div>
-        {snapshot.nodes.map((node) => (
+        {customNodes.map((node) => (
           <div className={`table-row node-grid ${!node.enabled ? "is-disabled" : ""}`} key={node.id}>
             <div className="node-name"><StatusDot status={node.health.status} /><div><strong>{node.name}</strong><code>{node.rewriteBase}</code></div></div>
             <span className={`status-text status-text--${statusTone(node.health.status)}`}>{statusLabel[node.health.status]}</span>
@@ -212,7 +219,7 @@ function Nodes({ snapshot, busy, run, onImport }: { snapshot: AppSnapshot; busy:
             {node.health.failureReason && <p className="row-detail">{node.health.failureReason}</p>}
           </div>
         ))}
-        {!snapshot.nodes.length && <div className="empty-state"><strong>还没有节点</strong><p>添加代理地址，或导入本地 JSON 文件。</p></div>}
+        {!customNodes.length && <div className="empty-state"><strong>还没有自定义节点</strong><p>GitBoost 会自动使用系统线路；也可以添加自己的代理地址。</p></div>}
       </section>
       <div className="inline-explainer"><strong>检测仓库</strong><code>https://github.com/octocat/Hello-World.git</code><span>检测隔离运行，不修改你的全局 Git 配置。</span></div>
       {editing && <ManageNode node={editing} busy={busy} run={run} onClose={() => setEditing(null)} />}
@@ -226,7 +233,7 @@ function ManageNode({ node, busy, run, onClose }: { node: NodeEntry; busy: strin
   return (
     <Modal title="管理节点" onClose={onClose}>
       <div className="modal-body"><label className="field"><span>名称</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><div className="readonly-field"><span>重写前缀</span><code>{node.rewriteBase}</code></div><div className="setting-row"><div><strong>参与自动选择</strong><p>停用后保留检测记录，但不会被选中。</p></div><Switch label="参与自动选择" checked={node.enabled} onChange={(enabled) => run("node-enable", () => api.setNodeEnabled(node.id, enabled), enabled ? "节点已启用" : "节点已停用").catch(() => undefined)} /></div></div>
-      <footer className="modal-footer"><Button tone="danger" disabled={node.builtIn} onClick={() => run("node-delete", () => api.deleteNode(node.id), "节点已删除").then(onClose).catch(() => undefined)}>{node.builtIn ? "预置节点不可删除" : "删除"}</Button><Button disabled={!usable} onClick={() => run("node-fix", () => api.setLineMode("fixed", node.id), `已固定到 ${node.name}`).then(onClose).catch(() => undefined)}>{usable ? "固定此节点" : "检测通过后可固定"}</Button><span /><Button onClick={onClose}>取消</Button><Button tone="primary" busy={busy === "node-save"} disabled={!name.trim()} onClick={() => run("node-save", () => api.renameNode(node.id, name.trim()), "名称已保存").then(onClose).catch(() => undefined)}>保存</Button></footer>
+      <footer className="modal-footer"><Button tone="danger" onClick={() => run("node-delete", () => api.deleteNode(node.id), "节点已删除").then(onClose).catch(() => undefined)}>删除</Button><Button disabled={!usable} onClick={() => run("node-fix", () => api.setLineMode("fixed", node.id), `已固定到 ${node.name}`).then(onClose).catch(() => undefined)}>{usable ? "固定此节点" : "检测通过后可固定"}</Button><span /><Button onClick={onClose}>取消</Button><Button tone="primary" busy={busy === "node-save"} disabled={!name.trim()} onClick={() => run("node-save", () => api.renameNode(node.id, name.trim()), "名称已保存").then(onClose).catch(() => undefined)}>保存</Button></footer>
     </Modal>
   );
 }
@@ -292,11 +299,6 @@ function Routes({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: string |
 function Downloads({ busy, run }: { busy: string | null; run: Runner }) {
   const [url, setUrl] = useState("");
   const [target, setTarget] = useState<DownloadTarget | null>(null);
-  const prepare = async () => {
-    const next = await run("download-prepare", () => api.prepareDownload(url));
-    await navigator.clipboard.writeText(next.acceleratedUrl);
-    setTarget(next);
-  };
   const download = async () => {
     const next = await run("download-open", () => api.openDownload(url), "已通过节点在浏览器中打开下载");
     setTarget(next);
@@ -307,18 +309,18 @@ function Downloads({ busy, run }: { busy: string | null; run: Runner }) {
   };
   return (
     <div className="page">
-      <PageHeader eyebrow="Release 文件" title="文件下载" description="粘贴公开 GitHub Release 文件地址；GitBoost 会先通过当前节点做小流量探测，再交给默认浏览器下载。" />
+      <PageHeader eyebrow="Release 文件" title="文件下载" description="粘贴公开 GitHub Release 文件地址；GitBoost 会先通过当前线路做小流量探测，再交给默认浏览器下载。" />
       <section className="download-card">
         <label htmlFor="download-url">GitHub 文件地址</label>
         <div className="download-input">
           <input id="download-url" value={url} onChange={(event) => changeUrl(event.target.value)} placeholder="https://github.com/owner/repo/releases/download/v1.0/file.zip" spellCheck={false} onKeyDown={(event) => { if (event.key === "Enter" && url.trim()) download().catch(() => undefined); }} />
           <Button tone="primary" busy={busy === "download-open"} disabled={!url.trim()} onClick={() => download().catch(() => undefined)}>开始下载</Button>
         </div>
-        <p>只检查地址格式，不会直连 GitHub 验证文件；实际可用性由当前节点探测。</p>
+        <p>只检查地址格式，不会直连 GitHub 验证文件；实际可用性由当前线路探测。</p>
       </section>
       <section className="section-block">
-        <div className="section-title"><div><h2>下载线路</h2><p>下载操作独立于 Git 路由清单。节点失败时不会静默改为 GitHub 直连。</p></div><Button busy={busy === "download-prepare"} disabled={!url.trim()} onClick={() => prepare().catch(() => undefined)}>复制加速地址</Button></div>
-        {target ? <dl className="download-target"><div><dt>文件</dt><dd>{target.fileName}</dd></div><div><dt>节点</dt><dd>{target.nodeName}</dd></div><div><dt>加速地址</dt><dd><code>{target.acceleratedUrl}</code></dd></div></dl> : <div className="empty-state compact"><strong>等待下载地址</strong><p>支持 releases/download 和 releases/latest/download。</p></div>}
+        <div className="section-title"><div><h2>下载线路</h2><p>下载操作独立于 Git 路由清单。节点失败时不会静默改为 GitHub 直连。</p></div></div>
+        {target ? <dl className="download-target"><div><dt>文件</dt><dd>{target.fileName}</dd></div><div><dt>线路</dt><dd>GitHub 加速</dd></div></dl> : <div className="empty-state compact"><strong>等待下载地址</strong><p>支持 releases/download 和 releases/latest/download。</p></div>}
       </section>
       <footer className="page-footnote">第三方节点可以看到公开仓库路径和文件名。GitBoost 不支持带凭据、Token、查询参数或片段的地址。</footer>
     </div>
@@ -404,7 +406,7 @@ function Settings({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: string
   const [logLevel, setLogLevel] = useState(snapshot.settings.logLevel);
   const [launchAtLogin, setLaunchAtLogin] = useState(snapshot.settings.launchAtLogin);
   useEffect(() => { autostartEnabled().then(setLaunchAtLogin).catch(() => undefined); }, []);
-  const saveNodes = async () => { const path = await save({ defaultPath: "gitboost-nodes.json", filters: [{ name: "JSON", extensions: ["json"] }] }); if (path) await run("export", () => api.exportNodes(path), "节点已导出"); };
+  const saveNodes = async () => { const path = await save({ defaultPath: "gitboost-nodes.json", filters: [{ name: "JSON", extensions: ["json"] }] }); if (path) await run("export", () => api.exportNodes(path), "自定义节点已导出"); };
   const setAutostart = async (enabled: boolean) => {
     enabled ? await enableAutostart() : await disableAutostart();
     setLaunchAtLogin(enabled);
@@ -418,7 +420,7 @@ function Settings({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: string
         <div className="setting-row"><div><strong>登录时启动</strong><p>保持托盘运行，以便节点失效后重新选路。</p></div><Switch label="登录时启动" checked={launchAtLogin} onChange={(enabled) => setAutostart(enabled).catch(() => undefined)} /></div>
         <div className="setting-row"><div><strong>日志级别</strong><p>日志会移除凭据、查询参数和命令环境。</p></div><select value={logLevel} onChange={(event) => setLogLevel(event.target.value as "error" | "info" | "debug")}><option value="error">仅错误</option><option value="info">信息</option><option value="debug">调试</option></select></div>
       </section>
-      <section className="section-block maintenance"><div className="section-title"><div><h2>数据与恢复</h2><p>恢复只清空 GitBoost 自己的重写规则，不修改仓库 remote。</p></div></div><div className="maintenance-actions"><Button busy={busy === "export"} onClick={() => saveNodes().catch(() => undefined)}>导出节点 JSON</Button><Button busy={busy === "clear-logs"} onClick={() => run("clear-logs", api.clearLogs, "本地日志已清理").catch(() => undefined)}>清理日志</Button><Button tone="danger" busy={busy === "restore"} onClick={() => run("restore", api.restoreGitConfig, "GitBoost 配置已恢复为直连").catch(() => undefined)}>恢复 Git 配置</Button></div></section>
+      <section className="section-block maintenance"><div className="section-title"><div><h2>数据与恢复</h2><p>恢复只清空 GitBoost 自己的重写规则，不修改仓库 remote。</p></div></div><div className="maintenance-actions"><Button busy={busy === "export"} onClick={() => saveNodes().catch(() => undefined)}>导出自定义节点</Button><Button busy={busy === "clear-logs"} onClick={() => run("clear-logs", api.clearLogs, "本地日志已清理").catch(() => undefined)}>清理日志</Button><Button tone="danger" busy={busy === "restore"} onClick={() => run("restore", api.restoreGitConfig, "GitBoost 配置已恢复为直连").catch(() => undefined)}>恢复 Git 配置</Button></div></section>
       <div className="about-line"><span>GitBoost 0.1.0 · macOS / Windows</span><span>本地运行 · 无账号 · 无遥测</span></div>
     </div>
   );

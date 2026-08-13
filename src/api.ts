@@ -17,8 +17,8 @@ const browserMock: AppSnapshot = {
   },
   nodes: [
     {
-      id: "builtin-fastgit",
-      name: "FastGit",
+      id: "https://fastgit.cc/https://github.com/",
+      name: "fastgit.cc",
       rewriteBase: "https://fastgit.cc/https://github.com/",
       enabled: true,
       builtIn: true,
