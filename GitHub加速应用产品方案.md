@@ -127,11 +127,11 @@ git push
 
 ### 5.2 导入节点
 
-批量粘贴时一行一个“重写前缀”：
+批量粘贴时一行一个代理地址，应用自动补全 `/https://github.com/` 重写路径；也兼容直接输入完整重写前缀：
 
 ```text
-https://proxy-a.example/https://github.com/
-https://proxy-b.example/https://github.com/
+https://proxy-a.example
+https://proxy-b.example/service
 ```
 
 JSON 格式：
@@ -155,6 +155,7 @@ JSON 格式：
 导入规则：
 
 - 仅接受 HTTPS。
+- 代理地址自动规范化为以 `/https://github.com/` 结尾的固定重写前缀。
 - 去除首尾空白并做 URL 规范化、去重。
 - 不接受用户名、密码、Token、查询参数和片段。
 - 不执行导入文件中的命令、脚本或额外配置。

@@ -3,7 +3,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
 import { api, getSnapshot } from "./api";
-import type { AppSnapshot, DiagnosticReport, DownloadTarget, LineMode, NodeEntry, PageKey, RouteScope, UsageLogSnapshot } from "./types";
+import type { AppSnapshot, DiagnosticReport, DownloadTarget, ImportResult, LineMode, NodeEntry, PageKey, RouteScope, UsageLogSnapshot } from "./types";
 import { currentNode, formatLatency, formatRelativeTime, statusLabel, statusTone, successRate } from "./utils";
 
 const navItems: { key: PageKey; label: string }[] = [
@@ -103,7 +103,7 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [toast]);
 
-  const run = useCallback(async <T,>(key: string, operation: () => Promise<T>, message?: string) => {
+  const run = useCallback(async <T,>(key: string, operation: () => Promise<T>, message?: string | ((result: T) => string | undefined)) => {
     setBusy(key);
     try {
       const result = await operation();
@@ -111,7 +111,8 @@ export default function App() {
         setSnapshot(result as unknown as AppSnapshot);
       }
       else await reload();
-      if (message) setToast({ kind: "success", text: message });
+      const successMessage = typeof message === "function" ? message(result) : message;
+      if (successMessage) setToast({ kind: "success", text: successMessage });
       return result;
     } catch (error) {
       setToast({ kind: "error", text: errorMessage(error) });
@@ -155,7 +156,7 @@ export default function App() {
   );
 }
 
-type Runner = <T>(key: string, operation: () => Promise<T>, message?: string) => Promise<T>;
+type Runner = <T>(key: string, operation: () => Promise<T>, message?: string | ((result: T) => string | undefined)) => Promise<T>;
 
 function Overview({ snapshot, busy, run, go }: { snapshot: AppSnapshot; busy: string | null; run: Runner; go: (page: PageKey) => void }) {
   const node = currentNode(snapshot.nodes, snapshot.settings.currentNodeId);
@@ -199,7 +200,7 @@ function Nodes({ snapshot, busy, run, onImport }: { snapshot: AppSnapshot; busy:
   const [editing, setEditing] = useState<NodeEntry | null>(null);
   return (
     <div className="page">
-      <PageHeader eyebrow="外部线路" title="节点" description="使用真实 git ls-remote 检测 Smart HTTP 能力；网页可打开不代表节点可用于 clone。" actions={<><Button onClick={onImport}>导入节点</Button><Button tone="primary" busy={busy === "test-all"} onClick={() => run("test-all", api.testAllNodes, "全部节点检测完成").catch(() => undefined)}>检测全部</Button></>} />
+      <PageHeader eyebrow="外部线路" title="节点" description="使用真实 git ls-remote 检测 Smart HTTP 能力；网页可打开不代表节点可用于 clone。" actions={<><Button onClick={onImport}>添加节点</Button><Button tone="primary" busy={busy === "test-all"} onClick={() => run("test-all", api.testAllNodes, "全部节点检测完成").catch(() => undefined)}>检测全部</Button></>} />
       <section className="table-shell">
         <div className="table-head node-grid"><span>节点</span><span>状态</span><span>成功率</span><span>中位耗时</span><span>最近检测</span><span /></div>
         {snapshot.nodes.map((node) => (
@@ -211,7 +212,7 @@ function Nodes({ snapshot, busy, run, onImport }: { snapshot: AppSnapshot; busy:
             {node.health.failureReason && <p className="row-detail">{node.health.failureReason}</p>}
           </div>
         ))}
-        {!snapshot.nodes.length && <div className="empty-state"><strong>还没有节点</strong><p>粘贴固定前缀地址，或导入本地 JSON 文件。</p></div>}
+        {!snapshot.nodes.length && <div className="empty-state"><strong>还没有节点</strong><p>添加代理地址，或导入本地 JSON 文件。</p></div>}
       </section>
       <div className="inline-explainer"><strong>检测仓库</strong><code>https://github.com/octocat/Hello-World.git</code><span>检测隔离运行，不修改你的全局 Git 配置。</span></div>
       {editing && <ManageNode node={editing} busy={busy} run={run} onClose={() => setEditing(null)} />}
@@ -231,15 +232,34 @@ function ManageNode({ node, busy, run, onClose }: { node: NodeEntry; busy: strin
 }
 
 function ImportNodes({ busy, run, onClose }: { busy: string | null; run: Runner; onClose: () => void }) {
-  const [text, setText] = useState("https://fastgit.cc/https://github.com/");
+  const [text, setText] = useState("");
+  const [result, setResult] = useState<ImportResult | null>(null);
+  const finishImport = (next: ImportResult) => {
+    if (next.imported > 0 && next.rejected.length === 0) onClose();
+    else setResult(next);
+  };
+  const importMessage = (next: ImportResult) => {
+    if (next.imported === 0) return undefined;
+    const details = [`已添加 ${next.imported} 个节点`];
+    if (next.duplicates > 0) details.push(`跳过 ${next.duplicates} 个重复地址`);
+    if (next.rejected.length > 0) details.push(`${next.rejected.length} 个地址未添加`);
+    return details.join("，");
+  };
   const importFile = async () => {
     const selected = await open({ multiple: false, filters: [{ name: "GitBoost 节点", extensions: ["json"] }] });
-    if (typeof selected === "string") await run("import-file", () => api.importNodeFile(selected), "节点文件已导入");
+    if (typeof selected === "string") {
+      setResult(null);
+      finishImport(await run("import-file", () => api.importNodeFile(selected), importMessage));
+    }
+  };
+  const importText = async () => {
+    setResult(null);
+    finishImport(await run("import-text", () => api.importNodes(text), importMessage));
   };
   return (
-    <Modal title="导入节点" onClose={onClose}>
-      <div className="modal-body"><p className="modal-intro">一行一个固定重写前缀。仅接受 HTTPS，且地址必须以 <code>/https://github.com/</code> 结尾。</p><textarea className="import-area" value={text} onChange={(event) => setText(event.target.value)} spellCheck={false} /><p className="field-help">含用户名、密码、Token、查询参数、片段或占位符的地址会被拒绝。</p></div>
-      <footer className="modal-footer"><Button busy={busy === "import-file"} onClick={() => importFile().catch(() => undefined)}>从 JSON 导入</Button><span /><Button onClick={onClose}>取消</Button><Button tone="primary" busy={busy === "import-text"} disabled={!text.trim()} onClick={() => run("import-text", () => api.importNodes(text), "节点已导入，启用前仍需检测").then(onClose).catch(() => undefined)}>导入</Button></footer>
+    <Modal title="添加节点" onClose={onClose}>
+      <div className="modal-body"><p className="modal-intro">每行输入一个代理地址，应用会自动补全 GitHub 重写路径。</p><textarea className="import-area" value={text} onChange={(event) => { setText(event.target.value); setResult(null); }} placeholder="https://proxy.example" aria-label="代理地址" spellCheck={false} /><p className="field-help">仅接受 HTTPS。含用户名、密码、Token、查询参数、片段或占位符的地址会被拒绝。</p>{result && <div className={`import-result ${result.rejected.length > 0 || result.imported === 0 ? "import-result--warning" : ""}`} aria-live="polite"><strong>{result.imported > 0 ? `已添加 ${result.imported} 个节点` : "没有添加新节点"}</strong><p>{[result.duplicates > 0 ? `${result.duplicates} 个重复地址已跳过` : "", result.rejected.length > 0 ? `${result.rejected.length} 个地址未添加` : ""].filter(Boolean).join("；") || "输入中没有可添加的节点。"}</p>{result.rejected.length > 0 && <ul>{result.rejected.map((item, index) => <li key={`${item.input}-${index}`}><code>{item.input}</code><span>{item.reason}</span></li>)}</ul>}</div>}</div>
+      <footer className="modal-footer"><Button busy={busy === "import-file"} onClick={() => importFile().catch(() => undefined)}>从 JSON 导入</Button><span /><Button onClick={onClose}>取消</Button><Button tone="primary" busy={busy === "import-text"} disabled={!text.trim()} onClick={() => importText().catch(() => undefined)}>添加</Button></footer>
     </Modal>
   );
 }

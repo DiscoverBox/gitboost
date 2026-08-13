@@ -14,10 +14,12 @@ test("core desktop workflow is navigable", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "节点", exact: true })).toBeVisible();
   await expect(page.getByText("https://fastgit.cc/https://github.com/", { exact: true })).toBeVisible();
 
-  await page.getByRole("button", { name: "导入节点" }).click();
-  await expect(page.getByRole("dialog", { name: "导入节点" })).toBeVisible();
+  await page.getByRole("button", { name: "添加节点" }).click();
+  await expect(page.getByRole("dialog", { name: "添加节点" })).toBeVisible();
+  await expect(page.getByRole("textbox", { name: "代理地址" })).toHaveAttribute("placeholder", "https://proxy.example");
+  await expect(page.getByText("应用会自动补全 GitHub 重写路径。", { exact: false })).toBeVisible();
   await page.keyboard.press("Escape");
-  await expect(page.getByRole("dialog", { name: "导入节点" })).toBeHidden();
+  await expect(page.getByRole("dialog", { name: "添加节点" })).toBeHidden();
 
   await page.getByRole("button", { name: "路由清单", exact: true }).click();
   await expect(page.getByText("访问私有仓库或不确定时，建议仅加速清单。")).toBeVisible();
@@ -32,6 +34,43 @@ test("core desktop workflow is navigable", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "使用日志", exact: true })).toBeVisible();
   await expect(page.getByText("只保存脱敏结果")).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+test("node import keeps failures open and reports actual results", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "节点", exact: true }).click();
+  await page.getByRole("button", { name: "添加节点" }).click();
+
+  await page.evaluate(() => {
+    const snapshot = {
+      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
+      nodes: [], routes: [],
+      environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
+    };
+    Object.assign(window, { __TAURI_INTERNALS__: { invoke: async (_command: string, args: { text?: string }) => {
+      if (args.text?.startsWith("http://")) return { ...snapshot, imported: 0, duplicates: 0, rejected: [{ input: args.text, reason: "仅接受 HTTPS" }] };
+      if (args.text === "https://duplicate.example") return { ...snapshot, imported: 0, duplicates: 1, rejected: [] };
+      return { ...snapshot, imported: 1, duplicates: 0, rejected: [] };
+    } } });
+  });
+
+  const input = page.getByRole("textbox", { name: "代理地址" });
+  await input.fill("http://proxy.example");
+  await page.getByRole("button", { name: "添加", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "添加节点" })).toBeVisible();
+  await expect(page.getByText("没有添加新节点")).toBeVisible();
+  await expect(page.getByText("仅接受 HTTPS", { exact: true })).toBeVisible();
+  await expect(page.locator(".toast")).toHaveCount(0);
+
+  await input.fill("https://duplicate.example");
+  await page.getByRole("button", { name: "添加", exact: true }).click();
+  await expect(page.getByText("1 个重复地址已跳过")).toBeVisible();
+  await expect(page.getByRole("dialog", { name: "添加节点" })).toBeVisible();
+
+  await input.fill("https://proxy.example");
+  await page.getByRole("button", { name: "添加", exact: true }).click();
+  await expect(page.getByRole("dialog", { name: "添加节点" })).toBeHidden();
+  await expect(page.locator(".toast")).toHaveText("已添加 1 个节点");
 });
 
 test("Windows uses the native title bar without duplicate drag spacing", async ({ browser }) => {

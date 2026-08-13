@@ -30,7 +30,13 @@ pub fn normalize_rewrite_base(input: &str) -> Result<String, String> {
     }
     let required_suffix = "/https://github.com/";
     if !url.path().ends_with(required_suffix) {
-        return Err("固定前缀必须以 /https://github.com/ 结尾".into());
+        let base_path = url.path().trim_end_matches('/');
+        let normalized_path = if base_path.ends_with("/https://github.com") {
+            format!("{base_path}/")
+        } else {
+            format!("{base_path}{required_suffix}")
+        };
+        url.set_path(&normalized_path);
     }
     url.set_query(None);
     url.set_fragment(None);
@@ -128,10 +134,27 @@ mod tests {
     }
 
     #[test]
+    fn expands_proxy_addresses_to_fixed_prefixes() {
+        assert_eq!(
+            normalize_rewrite_base("https://fastgit.cc").unwrap(),
+            "https://fastgit.cc/https://github.com/"
+        );
+        assert_eq!(
+            normalize_rewrite_base("https://proxy.example/service/").unwrap(),
+            "https://proxy.example/service/https://github.com/"
+        );
+        assert_eq!(
+            normalize_rewrite_base("https://fastgit.cc/https://github.com").unwrap(),
+            "https://fastgit.cc/https://github.com/"
+        );
+    }
+
+    #[test]
     fn rejects_credentials_queries_and_wrong_shape() {
         assert!(normalize_rewrite_base("https://token@fastgit.cc/https://github.com/").is_err());
         assert!(normalize_rewrite_base("https://fastgit.cc/https://github.com/?token=x").is_err());
         assert!(normalize_rewrite_base("https://fastgit.cc/{url}").is_err());
+        assert!(normalize_rewrite_base("http://fastgit.cc").is_err());
     }
 
     #[test]

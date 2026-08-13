@@ -931,12 +931,16 @@ mod tests {
         let core = AppCore::new(directory.path().to_path_buf()).unwrap();
         let result = core
             .import_nodes(
-                "https://fastgit.cc/https://github.com/\nhttps://proxy.example/https://github.com/",
+                "https://fastgit.cc\nhttps://proxy.example\nhttps://proxy.example/https://github.com/",
             )
             .unwrap();
         assert_eq!(result.imported, 1);
-        assert_eq!(result.duplicates, 1);
+        assert_eq!(result.duplicates, 2);
         assert_eq!(result.nodes.len(), 2);
+        assert_eq!(
+            result.nodes[1].node.rewrite_base,
+            "https://proxy.example/https://github.com/"
+        );
     }
 
     #[test]
