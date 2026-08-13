@@ -266,7 +266,10 @@ function ImportNodes({ busy, run, onClose }: { busy: string | null; run: Runner;
 
 function Routes({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: string | null; run: Runner }) {
   const [url, setUrl] = useState("");
+  const [query, setQuery] = useState("");
   const global = snapshot.settings.routeScope === "global";
+  const normalizedQuery = query.trim().toLowerCase();
+  const visibleRoutes = snapshot.routes.filter((route) => route.repositoryUrl.toLowerCase().includes(normalizedQuery));
   return (
     <div className="page">
       <PageHeader eyebrow="安全边界" title="路由清单" description={global ? "所有 GitHub HTTPS 仓库读取都会经过当前加速节点。" : "只有清单中的公开仓库会走外部节点。"} />
@@ -274,10 +277,12 @@ function Routes({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: string |
       {global ? <div className="notice notice--warning"><strong>全局加速不会使用项目清单</strong><p>Git 无法自动区分公开和私有仓库，所有 GitHub HTTPS 读取都会经过当前节点。</p></div> :
         <section className="section-block route-editor">
           <div className="section-title"><div><h2>公开加速仓库</h2><p>输入 owner/repository，或完整的 GitHub HTTPS 地址；可带或不带 .git。</p></div></div>
-          <div className="route-input"><input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="anthropics/skills.git" aria-label="GitHub 仓库" onKeyDown={(event) => { if (event.key === "Enter" && url.trim()) run("add-route", () => api.addRoute(url), "路由已加入清单").then(() => setUrl("")).catch(() => undefined); }} /><Button tone="primary" busy={busy === "add-route"} disabled={!url.trim()} onClick={() => run("add-route", () => api.addRoute(url), "路由已加入清单").then(() => setUrl("")).catch(() => undefined)}>加入清单</Button></div>
+          <div className="route-input"><input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="owner/repository 或完整 GitHub 地址" aria-label="GitHub 仓库" onKeyDown={(event) => { if (event.key === "Enter" && url.trim()) run("add-route", () => api.addRoute(url), "路由已加入清单").then(() => setUrl("")).catch(() => undefined); }} /><Button tone="primary" busy={busy === "add-route"} disabled={!url.trim()} onClick={() => run("add-route", () => api.addRoute(url), "路由已加入清单").then(() => setUrl("")).catch(() => undefined)}>加入清单</Button></div>
+          <div className="route-list-toolbar"><div className="route-list-summary"><strong>已添加仓库</strong><span>{normalizedQuery ? `${visibleRoutes.length} / ${snapshot.routes.length} 个` : `${snapshot.routes.length} 个`}</span></div>{snapshot.routes.length > 0 && <div className="route-search"><input type="search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索仓库地址" aria-label="搜索已添加仓库" /></div>}</div>
           <div className="route-list">
-            {snapshot.routes.map((route) => <div key={route.id}><div><code>{route.repositoryUrl}</code><span>加速</span></div><Button tone="quiet" onClick={() => run("delete-route", () => api.deleteRoute(route.id), "路由已删除").catch(() => undefined)}>删除</Button></div>)}
+            {visibleRoutes.map((route) => <div key={route.id}><div><code>{route.repositoryUrl}</code><span>加速</span></div><Button tone="quiet" onClick={() => run("delete-route", () => api.deleteRoute(route.id), "路由已删除").catch(() => undefined)}>删除</Button></div>)}
             {!snapshot.routes.length && <div className="empty-state compact"><strong>清单为空</strong><p>添加需要加速的公开仓库后即可启用。</p></div>}
+            {snapshot.routes.length > 0 && !visibleRoutes.length && <div className="empty-state compact"><strong>没有匹配的仓库</strong><p>换个关键词试试。</p></div>}
           </div>
         </section>}
     </div>
