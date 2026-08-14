@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 pub const SCHEMA_VERSION: u32 = 1;
 pub const FASTGIT_REWRITE_BASE: &str = "https://fastgit.cc/https://github.com/";
 pub const TEST_REPOSITORY: &str = "https://github.com/octocat/Hello-World.git";
-pub const DEFAULT_HEALTH_CHECK_MINUTES: u32 = 8 * 60;
+pub const DEFAULT_HEALTH_CHECK_MINUTES: u32 = 24 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

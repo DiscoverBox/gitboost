@@ -9,7 +9,7 @@ const browserMock: AppSnapshot = {
     lineMode: "automatic",
     fixedNodeId: null,
     currentNodeId: null,
-    healthCheckMinutes: 480,
+    healthCheckMinutes: 1440,
     launchAtLogin: false,
     logLevel: "info",
     usageLoggingEnabled: true,

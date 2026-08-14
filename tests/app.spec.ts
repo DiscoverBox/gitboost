@@ -14,6 +14,9 @@ test("core desktop workflow is navigable", async ({ page }) => {
   await expect(page.getByRole("navigation", { name: "主要导航" }).getByText("自定义节点", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await expect(page.getByRole("heading", { name: "自定义节点", exact: true })).toBeVisible();
+  const healthCheck = page.locator(".setting-row").filter({ hasText: "后台健康检查" }).locator("select");
+  await expect(healthCheck).toHaveValue("1440");
+  await expect(healthCheck.locator("option")).toHaveText(["关闭", "每小时", "每 8 小时", "每天", "每周", "每月"]);
   await expect(page.getByText("系统线路 1 个 · 使用公开仓库进行隔离检测，不修改全局 Git 配置", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "刷新系统线路" })).toBeVisible();
   await expect(page.getByText("https://fastgit.cc/https://github.com/", { exact: true })).toBeHidden();

@@ -40,7 +40,14 @@ const CATALOG_MAX_BYTES: usize = 262_144;
 const NODE_TEST_CONCURRENCY: usize = 4;
 const BACKGROUND_HEALTHY_NODE_TARGET: usize = 10;
 const BACKGROUND_HEALTHY_NODE_MINIMUM: usize = 5;
-const HEALTH_CHECK_INTERVALS: [u32; 3] = [0, DEFAULT_HEALTH_CHECK_MINUTES, 24 * 60];
+const HEALTH_CHECK_INTERVALS: [u32; 6] = [
+    0,
+    60,
+    8 * 60,
+    DEFAULT_HEALTH_CHECK_MINUTES,
+    7 * 24 * 60,
+    30 * 24 * 60,
+];
 
 #[derive(Debug)]
 pub struct AppCore {
@@ -1729,6 +1736,18 @@ mod tests {
 
         assert_eq!(settings.health_check_minutes, DEFAULT_HEALTH_CHECK_MINUTES);
         assert_eq!(settings.log_level, "debug");
+    }
+
+    #[test]
+    fn accepts_supported_health_check_intervals() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+
+        for minutes in [60, 8 * 60, 24 * 60, 7 * 24 * 60, 30 * 24 * 60] {
+            let snapshot = core.update_settings(minutes, "info").unwrap();
+            assert_eq!(snapshot.settings.health_check_minutes, minutes);
+        }
+        assert!(core.update_settings(2 * 60, "info").is_err());
     }
 
     #[test]

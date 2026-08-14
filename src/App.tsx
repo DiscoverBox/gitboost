@@ -464,7 +464,7 @@ function Settings({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, onIm
     <div className="page">
       <PageHeader eyebrow="本机偏好" title="设置" description="GitBoost 不上传使用数据；节点、健康状态和诊断日志均保存在本机。" actions={<Button tone="primary" busy={busy === "settings-save"} onClick={() => run("settings-save", () => api.updateSettings(minutes, logLevel), "设置已保存").catch(() => undefined)}>保存设置</Button>} />
       <section className="settings-list">
-        <div className="setting-row"><div><strong>后台健康检查</strong><p>维护最多 10 条可用线路；少于 5 条时才从系统线路补充。</p></div><select value={minutes} onChange={(event) => setMinutes(Number(event.target.value))}><option value={0}>关闭</option><option value={480}>每 8 小时</option><option value={1440}>每天</option></select></div>
+        <div className="setting-row"><div><strong>后台健康检查</strong><p>维护最多 10 条可用线路；少于 5 条时才从系统线路补充。</p></div><select value={minutes} onChange={(event) => setMinutes(Number(event.target.value))}><option value={0}>关闭</option><option value={60}>每小时</option><option value={480}>每 8 小时</option><option value={1440}>每天</option><option value={10080}>每周</option><option value={43200}>每月</option></select></div>
         <div className="setting-row"><div><strong>登录时启动</strong><p>保持托盘运行，以便节点失效后重新选路。</p></div><Switch label="登录时启动" checked={launchAtLogin} onChange={(enabled) => setAutostart(enabled).catch(() => undefined)} /></div>
         <div className="setting-row"><div><strong>日志级别</strong><p>日志会移除凭据、查询参数和命令环境。</p></div><select value={logLevel} onChange={(event) => setLogLevel(event.target.value as "error" | "info" | "debug")}><option value="error">仅错误</option><option value="info">信息</option><option value="debug">调试</option></select></div>
       </section>
