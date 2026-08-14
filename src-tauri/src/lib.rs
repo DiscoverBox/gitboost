@@ -472,9 +472,9 @@ pub fn run() {
                 AppCore::new(data_dir).map_err(|error| format!("GitBoost 初始化失败：{error}"))?;
             app.manage(core);
             usage::start_listener(app.handle().clone());
-            app.state::<AppCore>()
-                .refresh_registered_configuration()
-                .map_err(|error| format!("无法升级 GitBoost 配置：{error}"))?;
+            if let Err(error) = app.state::<AppCore>().refresh_registered_configuration() {
+                app.state::<AppCore>().configuration_refresh_failed(&error);
+            }
             install_tray(app)?;
             start_system_node_monitor(app.handle().clone());
             start_health_monitor(app.handle().clone());

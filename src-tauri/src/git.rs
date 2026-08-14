@@ -405,10 +405,25 @@ fn affects_github_https(rewrite_prefix: &str) -> bool {
 }
 
 pub fn effective_urls(config_path: &Path, original_url: &str) -> Result<(String, String), String> {
+    effective_urls_with_global_config(config_path, original_url, None)
+}
+
+pub fn effective_urls_isolated(
+    config_path: &Path,
+    original_url: &str,
+) -> Result<(String, String), String> {
+    effective_urls_with_global_config(config_path, original_url, Some(config_path))
+}
+
+fn effective_urls_with_global_config(
+    config_path: &Path,
+    original_url: &str,
+    global_config: Option<&Path>,
+) -> Result<(String, String), String> {
     let temp = tempfile::tempdir().map_err(|error| format!("无法创建诊断目录：{error}"))?;
     let directory = temp.path().to_string_lossy();
     let include = format!("include.path={}", config_path.display());
-    let init = run_git(
+    let init = run_git_with_global_config(
         [
             "-c",
             include.as_str(),
@@ -419,11 +434,12 @@ pub fn effective_urls(config_path: &Path, original_url: &str) -> Result<(String,
         ],
         None,
         Duration::from_secs(8),
+        global_config,
     )?;
     if !init.status.success() {
         return Err(command_error(&init));
     }
-    let add = run_git(
+    let add = run_git_with_global_config(
         [
             "-c",
             include.as_str(),
@@ -436,11 +452,12 @@ pub fn effective_urls(config_path: &Path, original_url: &str) -> Result<(String,
         ],
         None,
         Duration::from_secs(8),
+        global_config,
     )?;
     if !add.status.success() {
         return Err(command_error(&add));
     }
-    let fetch = run_git(
+    let fetch = run_git_with_global_config(
         [
             "-c",
             include.as_str(),
@@ -452,8 +469,9 @@ pub fn effective_urls(config_path: &Path, original_url: &str) -> Result<(String,
         ],
         None,
         Duration::from_secs(8),
+        global_config,
     )?;
-    let push = run_git(
+    let push = run_git_with_global_config(
         [
             "-c",
             include.as_str(),
@@ -466,6 +484,7 @@ pub fn effective_urls(config_path: &Path, original_url: &str) -> Result<(String,
         ],
         None,
         Duration::from_secs(8),
+        global_config,
     )?;
     if !fetch.status.success() || !push.status.success() {
         return Err("无法解析 Git 有效地址".into());
@@ -582,6 +601,15 @@ fn run_git<const N: usize>(
     current_dir: Option<&Path>,
     timeout: Duration,
 ) -> Result<Output, String> {
+    run_git_with_global_config(args, current_dir, timeout, None)
+}
+
+fn run_git_with_global_config<const N: usize>(
+    args: [&str; N],
+    current_dir: Option<&Path>,
+    timeout: Duration,
+    global_config: Option<&Path>,
+) -> Result<Output, String> {
     let mut command = Command::new("git");
     // GitBoost's own probes and configuration checks are operational noise, not user traffic.
     command.env("GIT_TRACE2_EVENT", "0");
@@ -590,6 +618,11 @@ fn run_git<const N: usize>(
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    if let Some(config) = global_config {
+        command
+            .env("GIT_CONFIG_GLOBAL", config)
+            .env("GIT_CONFIG_NOSYSTEM", "1");
+    }
     hide_console(&mut command);
     if let Some(directory) = current_dir {
         command.current_dir(directory);
@@ -686,6 +719,39 @@ mod tests {
             assert_eq!(fetch, expected_fetch);
             assert_eq!(push, original);
         }
+    }
+
+    #[test]
+    fn isolated_effective_urls_ignore_the_registered_live_config() {
+        let directory = tempfile::tempdir().unwrap();
+        let live = directory.path().join("live.gitconfig");
+        let candidate = directory.path().join("candidate.gitconfig");
+        let global = directory.path().join("global.gitconfig");
+        fs::write(
+            &live,
+            "[url \"https://old.example/https://github.com/openai/codex\"]\n\tinsteadOf = https://github.com/openai/codex\n",
+        )
+        .unwrap();
+        fs::write(
+            &candidate,
+            "[url \"https://new.example/https://github.com/openai/codex\"]\n\tinsteadOf = https://github.com/openai/codex\n",
+        )
+        .unwrap();
+        fs::write(&global, format!("[include]\n\tpath = {}\n", live.display())).unwrap();
+
+        let original = "https://github.com/openai/codex.git";
+        let (conflicted, _) =
+            effective_urls_with_global_config(&candidate, original, Some(&global)).unwrap();
+        assert_eq!(
+            conflicted,
+            "https://old.example/https://github.com/openai/codex.git"
+        );
+
+        let (fetch, _) = effective_urls_isolated(&candidate, original).unwrap();
+        assert_eq!(
+            fetch,
+            "https://new.example/https://github.com/openai/codex.git"
+        );
     }
 
     #[test]

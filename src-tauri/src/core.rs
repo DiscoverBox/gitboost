@@ -330,6 +330,14 @@ impl AppCore {
         let _ = append_log(&self.paths.logs, "ERROR", message);
     }
 
+    pub fn configuration_refresh_failed(&self, message: &str) {
+        let _ = append_log(
+            &self.paths.logs,
+            "ERROR",
+            &format!("startup configuration refresh failed: {message}"),
+        );
+    }
+
     pub fn set_usage_listening(&self, listening: bool) {
         self.usage_listening.store(listening, Ordering::Relaxed);
     }
@@ -988,7 +996,13 @@ impl AppCore {
                 .as_file()
                 .sync_all()
                 .map_err(|error| format!("无法同步配置候选：{error}"))?;
-            validate_configuration(candidate.path(), settings, selected, routes)?;
+            validate_configuration(
+                candidate.path(),
+                settings,
+                selected,
+                routes,
+                ValidationEnvironment::ManagedConfigOnly,
+            )?;
         }
         let _ = backup_file(
             &self.paths.gitconfig,
@@ -1003,9 +1017,13 @@ impl AppCore {
             }
         }
         if settings.acceleration_enabled && settings.line_mode != LineMode::Direct {
-            if let Err(error) =
-                validate_configuration(&self.paths.gitconfig, settings, selected, routes)
-            {
+            if let Err(error) = validate_configuration(
+                &self.paths.gitconfig,
+                settings,
+                selected,
+                routes,
+                ValidationEnvironment::EffectiveGit,
+            ) {
                 self.restore_git_state(previous.as_deref(), registered_before);
                 return Err(format!("写入后的 Git 配置验证失败：{error}"));
             }
@@ -1316,11 +1334,18 @@ impl AppCore {
     }
 }
 
+#[derive(Clone, Copy)]
+enum ValidationEnvironment {
+    ManagedConfigOnly,
+    EffectiveGit,
+}
+
 fn validate_configuration(
     config_path: &Path,
     settings: &Settings,
     selected: Option<&NodeDefinition>,
     routes: &[RouteEntry],
+    environment: ValidationEnvironment,
 ) -> Result<(), String> {
     let node = selected.ok_or_else(|| "没有通过检测的可用节点".to_string())?;
     let mut checks = Vec::new();
@@ -1363,7 +1388,12 @@ fn validate_configuration(
     }
 
     for (original, expected_fetch) in checks {
-        let (fetch, push) = git::effective_urls(config_path, &original)?;
+        let (fetch, push) = match environment {
+            ValidationEnvironment::ManagedConfigOnly => {
+                git::effective_urls_isolated(config_path, &original)
+            }
+            ValidationEnvironment::EffectiveGit => git::effective_urls(config_path, &original),
+        }?;
         if fetch != expected_fetch {
             return Err(format!("配置未正确处理 fetch：{original}"));
         }
@@ -1807,7 +1837,14 @@ mod tests {
         )
         .unwrap();
         atomic_write(&core.paths.gitconfig, complete.as_bytes()).unwrap();
-        validate_configuration(&core.paths.gitconfig, &settings, Some(&node), &routes).unwrap();
+        validate_configuration(
+            &core.paths.gitconfig,
+            &settings,
+            Some(&node),
+            &routes,
+            ValidationEnvironment::ManagedConfigOnly,
+        )
+        .unwrap();
 
         let incomplete = git::build_config(
             &settings,
@@ -1817,9 +1854,105 @@ mod tests {
         )
         .unwrap();
         atomic_write(&core.paths.gitconfig, incomplete.as_bytes()).unwrap();
-        let error = validate_configuration(&core.paths.gitconfig, &settings, Some(&node), &routes)
-            .unwrap_err();
+        let error = validate_configuration(
+            &core.paths.gitconfig,
+            &settings,
+            Some(&node),
+            &routes,
+            ValidationEnvironment::ManagedConfigOnly,
+        )
+        .unwrap_err();
         assert!(error.contains("octocat/Hello-World"));
+    }
+
+    #[test]
+    fn configuration_update_isolates_the_candidate_but_validates_effective_git_rules() {
+        const MARKER: &str = "GITBOOST_VALIDATION_ENVIRONMENT_CHILD";
+        if rerun_with_isolated_git(
+            "core::tests::configuration_update_isolates_the_candidate_but_validates_effective_git_rules",
+            MARKER,
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let route = RouteEntry {
+            id: "route".into(),
+            repository_url: "https://github.com/openai/codex.git".into(),
+            created_at: Utc::now(),
+        };
+        let replacement = NodeDefinition {
+            id: "replacement".into(),
+            name: "Replacement".into(),
+            rewrite_base: "https://new.example/https://github.com/".into(),
+            enabled: true,
+            built_in: false,
+        };
+        let settings = Settings {
+            acceleration_enabled: true,
+            line_mode: LineMode::Fixed,
+            fixed_node_id: Some(replacement.id.clone()),
+            current_node_id: Some(replacement.id.clone()),
+            ..Settings::default()
+        };
+        atomic_write_json(&core.paths.routes, &vec![route.clone()]).unwrap();
+        atomic_write_json(&core.paths.nodes, &vec![replacement.clone()]).unwrap();
+        atomic_write_json(
+            &core.paths.health,
+            &HashMap::from([(
+                replacement.id.clone(),
+                HealthSummary {
+                    status: NodeStatus::Available,
+                    success_count: 1,
+                    attempt_count: 1,
+                    ..HealthSummary::default()
+                },
+            )]),
+        )
+        .unwrap();
+        atomic_write_json(&core.paths.settings, &settings).unwrap();
+
+        let old_config = git::build_config(
+            &Settings {
+                acceleration_enabled: true,
+                line_mode: LineMode::Fixed,
+                fixed_node_id: Some(FASTGIT_REWRITE_BASE.into()),
+                current_node_id: Some(FASTGIT_REWRITE_BASE.into()),
+                ..Settings::default()
+            },
+            Some(&NodeDefinition::fastgit()),
+            std::slice::from_ref(&route),
+            Some(&core.paths.trace_socket),
+        )
+        .unwrap();
+        atomic_write(&core.paths.gitconfig, old_config.as_bytes()).unwrap();
+        git::register_include(&core.paths.gitconfig).unwrap();
+
+        core.refresh_registered_configuration().unwrap();
+        let (fetch, push) =
+            git::effective_urls(&core.paths.gitconfig, &route.repository_url).unwrap();
+        assert_eq!(
+            fetch,
+            "https://new.example/https://github.com/openai/codex.git"
+        );
+        assert_eq!(push, route.repository_url);
+
+        let previous_config = fs::read(&core.paths.gitconfig).unwrap();
+        let conflict = std::process::Command::new("git")
+            .args([
+                "config",
+                "--global",
+                "url.https://push-proxy.example/https://github.com/openai/codex.pushInsteadOf",
+                "https://github.com/openai/codex",
+            ])
+            .output()
+            .unwrap();
+        assert!(conflict.status.success());
+        let error = core.refresh_registered_configuration().unwrap_err();
+        assert!(error.contains("配置未保持 push 直连"));
+        assert_eq!(fs::read(&core.paths.gitconfig).unwrap(), previous_config);
+
+        git::unregister_include(&core.paths.gitconfig).unwrap();
     }
 
     #[test]
