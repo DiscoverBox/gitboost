@@ -30,7 +30,8 @@ test("core desktop workflow is navigable", async ({ page }) => {
 
   await page.getByRole("button", { name: "文件下载", exact: true }).click();
   await expect(page.getByRole("heading", { name: "文件下载", exact: true })).toBeVisible();
-  await expect(page.getByLabel("GitHub 文件地址")).toHaveAttribute("placeholder", "https://github.com/owner/repo/releases/download/v1.0/file.zip");
+  await expect(page.getByLabel("GitHub 地址")).toHaveAttribute("placeholder", "https://github.com/owner/repository/...");
+  await expect(page.getByText("支持 github.com 下的任意公开路径。")).toBeVisible();
   await expect(page.getByText("节点失败时不会静默改为 GitHub 直连。")).toBeVisible();
 
   await page.getByRole("button", { name: "使用日志", exact: true }).click();

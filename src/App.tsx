@@ -330,7 +330,7 @@ function Downloads({ busy, run }: { busy: string | null; run: Runner }) {
   const [url, setUrl] = useState("");
   const [target, setTarget] = useState<DownloadTarget | null>(null);
   const download = async () => {
-    const next = await run("download-open", () => api.openDownload(url), "已通过节点在浏览器中打开下载");
+    const next = await run("download-open", () => api.openDownload(url), "已通过节点在浏览器中打开地址");
     setTarget(next);
   };
   const changeUrl = (value: string) => {
@@ -339,18 +339,18 @@ function Downloads({ busy, run }: { busy: string | null; run: Runner }) {
   };
   return (
     <div className="page">
-      <PageHeader eyebrow="Release 文件" title="文件下载" description="粘贴公开 GitHub Release 文件地址；GitBoost 会先通过当前线路做小流量探测，再交给默认浏览器下载。" />
+      <PageHeader eyebrow="GitHub 地址" title="文件下载" description="粘贴公开 GitHub 地址；GitBoost 会先通过当前线路做小流量探测，再交给默认浏览器打开。" />
       <section className="download-card">
-        <label htmlFor="download-url">GitHub 文件地址</label>
+        <label htmlFor="download-url">GitHub 地址</label>
         <div className="download-input">
-          <input id="download-url" value={url} onChange={(event) => changeUrl(event.target.value)} placeholder="https://github.com/owner/repo/releases/download/v1.0/file.zip" spellCheck={false} onKeyDown={(event) => { if (event.key === "Enter" && url.trim()) download().catch(() => undefined); }} />
+          <input id="download-url" value={url} onChange={(event) => changeUrl(event.target.value)} placeholder="https://github.com/owner/repository/..." spellCheck={false} onKeyDown={(event) => { if (event.key === "Enter" && url.trim()) download().catch(() => undefined); }} />
           <Button tone="primary" busy={busy === "download-open"} disabled={!url.trim()} onClick={() => download().catch(() => undefined)}>开始下载</Button>
         </div>
         <p>只检查地址格式，不会直连 GitHub 验证文件；实际可用性由当前线路探测。</p>
       </section>
       <section className="section-block">
         <div className="section-title"><div><h2>下载线路</h2><p>下载操作独立于 Git 路由清单。节点失败时不会静默改为 GitHub 直连。</p></div></div>
-        {target ? <dl className="download-target"><div><dt>文件</dt><dd>{target.fileName}</dd></div><div><dt>线路</dt><dd>GitHub 加速</dd></div></dl> : <div className="empty-state compact"><strong>等待下载地址</strong><p>支持 releases/download 和 releases/latest/download。</p></div>}
+        {target ? <dl className="download-target"><div><dt>目标</dt><dd>{target.fileName}</dd></div><div><dt>线路</dt><dd>GitHub 加速</dd></div></dl> : <div className="empty-state compact"><strong>等待 GitHub 地址</strong><p>支持 github.com 下的任意公开路径。</p></div>}
       </section>
       <footer className="page-footnote">第三方节点可以看到公开仓库路径和文件名。GitBoost 不支持带凭据、Token、查询参数或片段的地址。</footer>
     </div>
