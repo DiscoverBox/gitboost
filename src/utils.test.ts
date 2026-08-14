@@ -8,8 +8,8 @@ describe("display utilities", () => {
   });
 
   it("calculates success rate from real attempts", () => {
-    expect(successRate({ status: "available", successCount: 3, attemptCount: 4, medianLatencyMs: 200, consecutiveFailures: 0, checkedAt: null, failureReason: null })).toBe("75%");
-    expect(successRate({ status: "untested", successCount: 0, attemptCount: 0, medianLatencyMs: null, consecutiveFailures: 0, checkedAt: null, failureReason: null })).toBe("—");
+    expect(successRate({ status: "available", inAutoPool: true, successCount: 3, attemptCount: 4, medianLatencyMs: 200, consecutiveFailures: 0, checkedAt: null, failureReason: null })).toBe("75%");
+    expect(successRate({ status: "untested", inAutoPool: false, successCount: 0, attemptCount: 0, medianLatencyMs: null, consecutiveFailures: 0, checkedAt: null, failureReason: null })).toBe("—");
   });
 
   it("has explicit copy for every state", () => {

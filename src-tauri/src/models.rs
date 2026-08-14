@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 pub const SCHEMA_VERSION: u32 = 1;
 pub const FASTGIT_REWRITE_BASE: &str = "https://fastgit.cc/https://github.com/";
 pub const TEST_REPOSITORY: &str = "https://github.com/octocat/Hello-World.git";
+pub const DEFAULT_HEALTH_CHECK_MINUTES: u32 = 8 * 60;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -35,7 +36,7 @@ impl Default for Settings {
             line_mode: LineMode::Automatic,
             fixed_node_id: None,
             current_node_id: None,
-            health_check_minutes: 30,
+            health_check_minutes: DEFAULT_HEALTH_CHECK_MINUTES,
             launch_at_login: false,
             log_level: "info".into(),
             usage_logging_enabled: true,
@@ -96,6 +97,7 @@ impl NodeDefinition {
 #[serde(rename_all = "camelCase")]
 pub struct HealthSummary {
     pub status: NodeStatus,
+    pub in_auto_pool: bool,
     pub success_count: u32,
     pub attempt_count: u32,
     pub median_latency_ms: Option<u64>,
@@ -110,6 +112,7 @@ impl Default for HealthSummary {
     fn default() -> Self {
         Self {
             status: NodeStatus::Untested,
+            in_auto_pool: false,
             success_count: 0,
             attempt_count: 0,
             median_latency_ms: None,
@@ -134,6 +137,7 @@ pub struct NodeEntry {
 pub struct NodeTestProgress {
     pub completed: usize,
     pub total: usize,
+    pub finished: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -98,7 +98,7 @@ export default function App() {
   const [nodeTestProgress, setNodeTestProgress] = useState<NodeTestProgress | null>(null);
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
-  const nodeTestRunning = nodeTestProgress !== null && nodeTestProgress.completed < nodeTestProgress.total;
+  const nodeTestRunning = nodeTestProgress !== null;
 
   const reload = useCallback(async () => setSnapshot(await getSnapshot()), []);
   useEffect(() => { reload().catch((error) => setToast({ kind: "error", text: errorMessage(error) })); }, [reload]);
@@ -107,7 +107,7 @@ export default function App() {
     const snapshotListener = listen<AppSnapshot>("snapshot-updated", (event) => setSnapshot(event.payload));
     const errorListener = listen<string>("operation-error", (event) => setToast({ kind: "error", text: event.payload }));
     const progressListener = listen<NodeTestProgress>("node-test-progress", (event) => {
-      setNodeTestProgress(event.payload.completed < event.payload.total ? event.payload : null);
+      setNodeTestProgress(event.payload.finished ? null : event.payload);
     });
     return () => { snapshotListener.then((unlisten) => unlisten()); errorListener.then((unlisten) => unlisten()); progressListener.then((unlisten) => unlisten()); };
   }, []);
@@ -173,7 +173,7 @@ type Runner = <T>(key: string, operation: () => Promise<T>, message?: string | (
 
 function Overview({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, go }: { snapshot: AppSnapshot; busy: string | null; nodeTestProgress: NodeTestProgress | null; nodeTestRunning: boolean; run: Runner; go: (page: PageKey) => void }) {
   const node = currentNode(snapshot.nodes, snapshot.settings.currentNodeId);
-  const usable = snapshot.nodes.filter((item) => item.enabled && ["available", "slow"].includes(item.health.status));
+  const usable = snapshot.nodes.filter((item) => item.enabled && item.health.inAutoPool && ["available", "slow"].includes(item.health.status));
   const lineModeOptions: { value: LineMode; label: string }[] = [
     { value: "automatic", label: "自动选择" },
     ...(snapshot.settings.lineMode === "fixed" ? [{ value: "fixed" as const, label: "固定节点" }] : []),
@@ -199,7 +199,7 @@ function Overview({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, go }
 
       {!snapshot.environment.gitAvailable && <div className="notice notice--danger"><strong>未检测到系统 Git</strong><p>请先安装 Git（Windows 推荐 Git for Windows），然后再开启加速。</p></div>}
       {snapshot.environment.conflictScanError ? <div className="notice notice--danger"><strong>URL 重写冲突检查失败</strong><p>{snapshot.environment.conflictScanError}</p><Button tone="quiet" onClick={() => go("diagnostics")}>查看诊断</Button></div> : snapshot.environment.conflicts > 0 && <div className="notice notice--warning"><strong>发现 {snapshot.environment.conflicts} 条 URL 重写冲突</strong><p>GitBoost 不会覆盖它们。请先到环境诊断查看来源。</p><Button tone="quiet" onClick={() => go("diagnostics")}>查看诊断</Button></div>}
-      {!usable.length && <div className="notice"><strong>还没有通过验证的线路</strong><p>系统线路和自定义节点都必须先通过真实 Git 检测。</p><Button tone="quiet" busy={busy === "test-all" || nodeTestRunning} busyLabel={nodeTestProgress ? `检测中 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "线路检测完成").catch(() => undefined)}>立即检测</Button></div>}
+      {!usable.length && <div className="notice"><strong>自动线路池中还没有可用线路</strong><p>系统线路和自定义节点都必须先通过真实 Git 检测。</p><Button tone="quiet" busy={busy === "test-all" || nodeTestRunning} busyLabel={nodeTestProgress ? `检测中 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "线路检测完成").catch(() => undefined)}>立即检测</Button></div>}
 
       <section className="section-block">
         <div className="section-title"><div><h2>线路控制</h2><p>切换只影响下一次 Git 操作；已开始的 clone 需要手动重试。</p></div><Button busy={busy === "test-all" || nodeTestRunning} busyLabel={nodeTestProgress ? `检测中 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "节点检测完成").catch(() => undefined)}>重新测速</Button></div>
@@ -265,7 +265,7 @@ function ManageNode({ node, busy, run, onClose }: { node: NodeEntry; busy: strin
   const usable = node.enabled && (node.health.status === "available" || node.health.status === "slow");
   return (
     <Modal title="管理节点" onClose={onClose}>
-      <div className="modal-body"><label className="field"><span>名称</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><div className="readonly-field"><span>重写前缀</span><code>{node.rewriteBase}</code></div><div className="setting-row"><div><strong>参与自动选择</strong><p>停用后保留检测记录，但不会被选中。</p></div><Switch label="参与自动选择" checked={node.enabled} onChange={(enabled) => run("node-enable", () => api.setNodeEnabled(node.id, enabled), enabled ? "节点已启用" : "节点已停用").catch(() => undefined)} /></div></div>
+      <div className="modal-body"><label className="field"><span>名称</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><div className="readonly-field"><span>重写前缀</span><code>{node.rewriteBase}</code></div><div className="setting-row"><div><strong>允许加入自动线路池</strong><p>停用后保留检测记录，但不会进入自动线路池。</p></div><Switch label="允许加入自动线路池" checked={node.enabled} onChange={(enabled) => run("node-enable", () => api.setNodeEnabled(node.id, enabled), enabled ? "节点已启用" : "节点已停用").catch(() => undefined)} /></div></div>
       <footer className="modal-footer"><Button tone="danger" onClick={() => run("node-delete", () => api.deleteNode(node.id), "节点已删除").then(onClose).catch(() => undefined)}>删除</Button><Button disabled={!usable} onClick={() => run("node-fix", () => api.setLineMode("fixed", node.id), `已固定到 ${node.name}`).then(onClose).catch(() => undefined)}>{usable ? "固定此节点" : "检测通过后可固定"}</Button><span /><Button onClick={onClose}>取消</Button><Button tone="primary" busy={busy === "node-save"} disabled={!name.trim()} onClick={() => run("node-save", () => api.renameNode(node.id, name.trim()), "名称已保存").then(onClose).catch(() => undefined)}>保存</Button></footer>
     </Modal>
   );
@@ -334,7 +334,7 @@ function Downloads({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: strin
   const [target, setTarget] = useState<DownloadTarget | null>(null);
   const [attemptedNodeIds, setAttemptedNodeIds] = useState<string[]>([]);
   const [lastAttemptFailed, setLastAttemptFailed] = useState(false);
-  const canRetry = snapshot.nodes.some((node) => node.enabled && ["available", "slow"].includes(node.health.status) && !attemptedNodeIds.includes(node.id));
+  const canRetry = snapshot.nodes.some((node) => node.enabled && node.health.inAutoPool && ["available", "slow"].includes(node.health.status) && !attemptedNodeIds.includes(node.id));
   const download = async () => {
     try {
       await run("download-open", async () => {
@@ -368,7 +368,7 @@ function Downloads({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: strin
       </section>
       <section className="section-block">
         <div className="section-title"><div><h2>下载线路</h2><p>下载操作独立于 Git 路由清单。节点失败时不会静默改为 GitHub 直连。</p></div></div>
-        {target ? <><dl className="download-target"><div><dt>目标</dt><dd>{target.fileName}</dd></div><div><dt>线路</dt><dd>{target.nodeName}</dd></div></dl>{canRetry ? <div className="download-retry"><p>{lastAttemptFailed ? "当前线路未能获取此文件，可尝试下一条已检测可用线路。" : "需要时可改用下一条已检测可用线路。"}</p><Button busy={busy === "download-open"} onClick={() => download().catch(() => undefined)}>换线路重试</Button></div> : lastAttemptFailed ? <div className="download-retry"><p>没有其他已检测可用的下载线路。</p></div> : null}</> : <div className="empty-state compact"><strong>等待 GitHub 地址</strong><p>支持 github.com 下的任意公开路径。</p></div>}
+        {target ? <><dl className="download-target"><div><dt>目标</dt><dd>{target.fileName}</dd></div><div><dt>线路</dt><dd>{target.nodeName}</dd></div></dl>{canRetry ? <div className="download-retry"><p>{lastAttemptFailed ? "当前线路未能获取此文件，可尝试自动池中的下一条线路。" : "需要时可改用自动池中的下一条线路。"}</p><Button busy={busy === "download-open"} onClick={() => download().catch(() => undefined)}>换线路重试</Button></div> : lastAttemptFailed ? <div className="download-retry"><p>自动线路池中没有其他可用线路。</p></div> : null}</> : <div className="empty-state compact"><strong>等待 GitHub 地址</strong><p>支持 github.com 下的任意公开路径。</p></div>}
       </section>
       <footer className="page-footnote">第三方节点可以看到公开仓库路径和文件名。GitBoost 不支持带凭据、Token、查询参数或片段的地址。</footer>
     </div>
@@ -464,7 +464,7 @@ function Settings({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, onIm
     <div className="page">
       <PageHeader eyebrow="本机偏好" title="设置" description="GitBoost 不上传使用数据；节点、健康状态和诊断日志均保存在本机。" actions={<Button tone="primary" busy={busy === "settings-save"} onClick={() => run("settings-save", () => api.updateSettings(minutes, logLevel), "设置已保存").catch(() => undefined)}>保存设置</Button>} />
       <section className="settings-list">
-        <div className="setting-row"><div><strong>后台健康检查</strong><p>应用运行时定期检测，只影响下一次 Git 操作。</p></div><select value={minutes} onChange={(event) => setMinutes(Number(event.target.value))}><option value={0}>关闭</option><option value={15}>每 15 分钟</option><option value={30}>每 30 分钟</option><option value={60}>每小时</option></select></div>
+        <div className="setting-row"><div><strong>后台健康检查</strong><p>维护最多 10 条可用线路；少于 5 条时才从系统线路补充。</p></div><select value={minutes} onChange={(event) => setMinutes(Number(event.target.value))}><option value={0}>关闭</option><option value={480}>每 8 小时</option><option value={1440}>每天</option></select></div>
         <div className="setting-row"><div><strong>登录时启动</strong><p>保持托盘运行，以便节点失效后重新选路。</p></div><Switch label="登录时启动" checked={launchAtLogin} onChange={(enabled) => setAutostart(enabled).catch(() => undefined)} /></div>
         <div className="setting-row"><div><strong>日志级别</strong><p>日志会移除凭据、查询参数和命令环境。</p></div><select value={logLevel} onChange={(event) => setLogLevel(event.target.value as "error" | "info" | "debug")}><option value="error">仅错误</option><option value="info">信息</option><option value="debug">调试</option></select></div>
       </section>

@@ -19,6 +19,7 @@ export interface Settings {
 
 export interface HealthSummary {
   status: NodeStatus;
+  inAutoPool: boolean;
   successCount: number;
   attemptCount: number;
   medianLatencyMs: number | null;
@@ -39,6 +40,7 @@ export interface NodeEntry {
 export interface NodeTestProgress {
   completed: number;
   total: number;
+  finished: boolean;
 }
 
 export interface RouteEntry {

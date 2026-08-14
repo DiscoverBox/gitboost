@@ -39,6 +39,9 @@ const MAX_SYSTEM_NODES: usize = 100;
 const CATALOG_MAX_BYTES: &str = "262144";
 const CATALOG_TIMEOUT_SECONDS: &str = "10";
 const NODE_TEST_CONCURRENCY: usize = 4;
+const BACKGROUND_HEALTHY_NODE_TARGET: usize = 10;
+const BACKGROUND_HEALTHY_NODE_MINIMUM: usize = 5;
+const HEALTH_CHECK_INTERVALS: [u32; 3] = [0, DEFAULT_HEALTH_CHECK_MINUTES, 24 * 60];
 
 #[derive(Debug)]
 pub struct AppCore {
@@ -52,6 +55,17 @@ pub struct AppCore {
 struct CatalogUpdate {
     changed: bool,
     recovery_applied_at: Option<chrono::DateTime<Utc>>,
+}
+
+struct BackgroundNodeTestResult {
+    tested: Vec<(String, HealthSummary)>,
+    pool_ids: HashSet<String>,
+}
+
+enum AutomaticPoolUpdate {
+    Rebuild,
+    Include(String),
+    Replace(HashSet<String>),
 }
 
 #[derive(Deserialize)]
@@ -106,8 +120,31 @@ impl AppCore {
     fn initialize(&self) -> Result<(), String> {
         if !self.paths.settings.exists() {
             atomic_write_json(&self.paths.settings, &Settings::default())?;
+        } else {
+            let mut settings: Settings = load_json(&self.paths.settings)?;
+            if !HEALTH_CHECK_INTERVALS.contains(&settings.health_check_minutes) {
+                settings.health_check_minutes = DEFAULT_HEALTH_CHECK_MINUTES;
+                atomic_write_json(&self.paths.settings, &settings)?;
+            }
         }
         self.initialize_node_files()?;
+        if self.paths.health.exists() {
+            let bytes = fs::read(&self.paths.health)
+                .map_err(|error| format!("无法读取 {}：{error}", self.paths.health.display()))?;
+            let value: serde_json::Value = serde_json::from_slice(&bytes)
+                .map_err(|error| format!("{} 数据损坏：{error}", self.paths.health.display()))?;
+            let legacy = value.as_object().is_some_and(|entries| {
+                entries.values().any(|entry| {
+                    entry
+                        .as_object()
+                        .is_some_and(|summary| !summary.contains_key("inAutoPool"))
+                })
+            });
+            if legacy {
+                fs::remove_file(&self.paths.health)
+                    .map_err(|error| format!("无法删除旧健康数据：{error}"))?;
+            }
+        }
         if !self.paths.health.exists() {
             atomic_write_json(&self.paths.health, &HashMap::<String, HealthSummary>::new())?;
         }
@@ -171,30 +208,29 @@ impl AppCore {
         self.paths.trace_socket.clone()
     }
 
-    pub fn refresh_system_nodes_with_progress<F>(&self, on_progress: F) -> Result<bool, String>
+    pub fn refresh_system_nodes(&self) -> Result<bool, String> {
+        let output = fetch_system_catalog()?;
+        self.apply_system_catalog_update(&output, git::test_node)
+    }
+
+    fn apply_system_catalog_update<F>(&self, output: &[u8], test: F) -> Result<bool, String>
     where
-        F: Fn(usize, usize) + Sync,
+        F: Fn(&NodeDefinition, &HealthSummary) -> HealthSummary + Sync,
     {
-        let update = fetch_system_catalog().and_then(|output| self.apply_system_catalog(&output));
-        let wait = update.as_ref().is_ok_and(|update| update.changed);
-        let Some(_run) = self.acquire_full_node_test(wait) else {
-            return update.map(|update| update.changed);
-        };
-        let tested = self.execute_full_node_test_locked(&on_progress);
-        let update = update?;
-        tested?;
+        let update = self.apply_system_catalog(output)?;
         if let Some(applied_at) = update.recovery_applied_at.as_ref() {
+            let _run = self.full_node_test_lock.lock();
+            *self.full_node_test_result.lock() = None;
+            let nodes = self.nodes()?;
+            let old_health = self.health()?;
+            let result = test_background_node_pool(&nodes, &old_health, test, |_, _| {})?;
+            self.persist_test_results(
+                result.tested,
+                AutomaticPoolUpdate::Replace(result.pool_ids),
+            )?;
             self.resume_acceleration_after_catalog_refresh(applied_at)?;
         }
         Ok(update.changed)
-    }
-
-    fn acquire_full_node_test(&self, wait: bool) -> Option<parking_lot::MutexGuard<'_, ()>> {
-        if wait {
-            Some(self.full_node_test_lock.lock())
-        } else {
-            self.full_node_test_lock.try_lock()
-        }
     }
 
     fn apply_system_catalog(&self, output: &[u8]) -> Result<CatalogUpdate, String> {
@@ -215,6 +251,9 @@ impl AppCore {
         available_ids.extend(urls.iter().cloned());
         let mut settings = self.settings()?;
         let original_settings = settings.clone();
+        let original_health = self.health()?;
+        let mut health = original_health.clone();
+        health.retain(|node_id, _| available_ids.contains(node_id));
         let mut settings_changed = false;
         if settings
             .fixed_node_id
@@ -246,6 +285,12 @@ impl AppCore {
                 let _ = atomic_write_json(&self.paths.system_nodes, &current);
                 return Err(error);
             }
+        }
+        if let Err(error) = atomic_write_json(&self.paths.health, &health) {
+            let _ = atomic_write_json(&self.paths.health, &original_health);
+            let _ = atomic_write_json(&self.paths.settings, &original_settings);
+            let _ = atomic_write_json(&self.paths.system_nodes, &current);
+            return Err(error);
         }
         let _ = append_log(
             &self.paths.logs,
@@ -318,27 +363,19 @@ impl AppCore {
         let current = settings.current_node_id.as_deref().and_then(|id| {
             pairs
                 .iter()
-                .find(|(node, _)| node.id == id && node.enabled)
+                .find(|(node, health)| {
+                    node.id == id && node.enabled && health.in_auto_pool && is_usable_health(health)
+                })
                 .map(|(node, _)| node)
         });
         let preferred = current.or_else(|| git::choose_node(&pairs));
-        let node = preferred
-            .or_else(|| {
-                if !excluded_node_ids.is_empty() {
-                    return None;
-                }
-                pairs
-                    .iter()
-                    .find(|(node, _)| node.enabled)
-                    .map(|(node, _)| node)
-            })
-            .ok_or_else(|| {
-                if excluded_node_ids.is_empty() {
-                    "没有已启用的下载节点".to_string()
-                } else {
-                    "没有其他已检测可用的下载线路".to_string()
-                }
-            })?;
+        let node = preferred.ok_or_else(|| {
+            if excluded_node_ids.is_empty() {
+                "自动线路池中没有可用的下载节点".to_string()
+            } else {
+                "自动线路池中没有其他可用的下载线路".to_string()
+            }
+        })?;
         downloads::prepare_target(original_url, node)
     }
 
@@ -347,11 +384,18 @@ impl AppCore {
         original_url: &str,
         node_id: &str,
     ) -> Result<DownloadTarget, String> {
+        let health = self.health()?;
         let nodes = self.nodes()?;
         let node = nodes
             .iter()
-            .find(|node| node.id == node_id && node.enabled)
-            .ok_or_else(|| "下载线路不存在或已停用".to_string())?;
+            .find(|node| {
+                node.id == node_id
+                    && node.enabled
+                    && health
+                        .get(&node.id)
+                        .is_some_and(|summary| summary.in_auto_pool && is_usable_health(summary))
+            })
+            .ok_or_else(|| "下载线路不在自动线路池中".to_string())?;
         downloads::prepare_target(original_url, node)
     }
 
@@ -463,6 +507,11 @@ impl AppCore {
     }
 
     pub fn test_node(&self, node_id: &str) -> Result<NodeEntry, String> {
+        let _run = self
+            .full_node_test_lock
+            .try_lock()
+            .ok_or_else(|| "线路检测正在进行，请稍后再试".to_string())?;
+        *self.full_node_test_result.lock() = None;
         let node = self
             .nodes()?
             .into_iter()
@@ -470,10 +519,6 @@ impl AppCore {
             .ok_or_else(|| "节点不存在".to_string())?;
         let previous = self.health()?.remove(node_id).unwrap_or_default();
         let tested = git::test_node(&node, &previous);
-        let _guard = self.lock.lock();
-        let mut health = self.health()?;
-        health.insert(node.id.clone(), tested.clone());
-        atomic_write_json(&self.paths.health, &health)?;
         let _ = append_log(
             &self.paths.logs,
             "INFO",
@@ -482,13 +527,16 @@ impl AppCore {
                 node.id, tested.status
             ),
         );
-        self.reselect_after_health_change()?;
-        Ok(NodeEntry {
-            node,
-            health: tested,
-        })
+        self.persist_test_results(
+            vec![(node.id.clone(), tested)],
+            AutomaticPoolUpdate::Include(node.id.clone()),
+        )?
+        .into_iter()
+        .find(|entry| entry.node.id == node.id)
+        .ok_or_else(|| "节点在检测期间已被删除".to_string())
     }
 
+    #[cfg(test)]
     pub fn test_all_nodes_with_progress<F>(&self, on_progress: F) -> Result<Vec<NodeEntry>, String>
     where
         F: Fn(usize, usize) + Sync,
@@ -509,13 +557,27 @@ impl AppCore {
     {
         let Some(_run) = self.full_node_test_lock.try_lock() else {
             let _run = self.full_node_test_lock.lock();
-            return self
-                .full_node_test_result
-                .lock()
-                .clone()
-                .unwrap_or_else(|| Err("全量线路检测异常结束，未产生检测结果".into()));
+            if let Some(result) = self.full_node_test_result.lock().clone() {
+                return result;
+            }
+            return self.execute_full_node_test_locked(&on_progress);
         };
         self.execute_full_node_test_locked(&on_progress)
+    }
+
+    pub fn test_background_nodes_with_progress<F>(
+        &self,
+        on_progress: F,
+    ) -> Result<Vec<NodeEntry>, String>
+    where
+        F: Fn(usize, usize) + Sync,
+    {
+        let _run = self
+            .full_node_test_lock
+            .try_lock()
+            .ok_or_else(|| "线路检测正在进行，请稍后再试".to_string())?;
+        *self.full_node_test_result.lock() = None;
+        self.test_background_nodes_locked(&on_progress)
     }
 
     fn execute_full_node_test_locked<F>(&self, on_progress: &F) -> Result<Vec<NodeEntry>, String>
@@ -539,7 +601,29 @@ impl AppCore {
             .collect();
         let old_health = self.health()?;
         let tested = test_nodes_bounded(&nodes, &old_health, git::test_node, on_progress)?;
+        self.persist_test_results(tested, AutomaticPoolUpdate::Rebuild)
+    }
+
+    fn test_background_nodes_locked<F>(&self, on_progress: &F) -> Result<Vec<NodeEntry>, String>
+    where
+        F: Fn(usize, usize) + Sync,
+    {
+        let nodes = self.nodes()?;
+        let old_health = self.health()?;
+        let result = test_background_node_pool(&nodes, &old_health, git::test_node, on_progress)?;
+        self.persist_test_results(result.tested, AutomaticPoolUpdate::Replace(result.pool_ids))
+    }
+
+    fn persist_test_results(
+        &self,
+        tested: Vec<(String, HealthSummary)>,
+        pool_update: AutomaticPoolUpdate,
+    ) -> Result<Vec<NodeEntry>, String> {
         let _guard = self.lock.lock();
+        let nodes = self.nodes()?;
+        let live_ids: HashSet<&str> = nodes.iter().map(|node| node.id.as_str()).collect();
+        let tested_ids: HashSet<String> =
+            tested.iter().map(|(node_id, _)| node_id.clone()).collect();
         let mut next_health = self.health()?;
         for (node_id, summary) in tested {
             let is_newer = next_health
@@ -549,9 +633,43 @@ impl AppCore {
                 next_health.insert(node_id, summary);
             }
         }
+        next_health.retain(|node_id, _| live_ids.contains(node_id.as_str()));
+        let (candidate_ids, required_id): (HashSet<String>, Option<String>) = match pool_update {
+            AutomaticPoolUpdate::Rebuild => (tested_ids, None),
+            AutomaticPoolUpdate::Include(node_id) => (
+                next_health
+                    .iter()
+                    .filter(|(_, summary)| summary.in_auto_pool)
+                    .map(|(node_id, _)| node_id.clone())
+                    .chain(std::iter::once(node_id.clone()))
+                    .collect(),
+                Some(node_id),
+            ),
+            AutomaticPoolUpdate::Replace(pool_ids) => (pool_ids, None),
+        };
+        let pool_ids =
+            select_auto_pool(&nodes, &next_health, &candidate_ids, required_id.as_deref());
+        for (node_id, summary) in &mut next_health {
+            summary.in_auto_pool = pool_ids.contains(node_id);
+        }
         atomic_write_json(&self.paths.health, &next_health)?;
         self.reselect_after_health_change()?;
         self.node_entries()
+    }
+
+    pub fn needs_background_node_discovery(&self) -> Result<bool, String> {
+        let health = self.health()?;
+        Ok(self
+            .nodes()?
+            .into_iter()
+            .filter(|node| {
+                node.enabled
+                    && health
+                        .get(&node.id)
+                        .is_some_and(|summary| summary.in_auto_pool && is_usable_health(summary))
+            })
+            .count()
+            < BACKGROUND_HEALTHY_NODE_MINIMUM)
     }
 
     fn resume_acceleration_after_catalog_refresh(
@@ -631,7 +749,23 @@ impl AppCore {
             .find(|node| node.id == node_id)
             .ok_or_else(|| "节点不存在".to_string())?;
         node.enabled = enabled;
+        let mut health = self.health()?;
+        if !enabled {
+            if let Some(summary) = health.get_mut(node_id) {
+                summary.in_auto_pool = false;
+            }
+        }
+        let mut settings = self.settings()?;
+        if !enabled && settings.fixed_node_id.as_deref() == Some(node_id) {
+            settings.fixed_node_id = None;
+            settings.line_mode = LineMode::Automatic;
+        }
+        if !enabled && settings.current_node_id.as_deref() == Some(node_id) {
+            settings.current_node_id = None;
+        }
         atomic_write_json(&self.paths.nodes, &nodes)?;
+        atomic_write_json(&self.paths.health, &health)?;
+        atomic_write_json(&self.paths.settings, &settings)?;
         drop(_guard);
         self.reselect_after_health_change()?;
         self.snapshot()
@@ -728,7 +862,14 @@ impl AppCore {
     ) -> Result<(), String> {
         settings.current_node_id = match settings.line_mode {
             LineMode::Automatic => git::choose_node(pairs).map(|node| node.id.clone()),
-            LineMode::Fixed => settings.fixed_node_id.clone(),
+            LineMode::Fixed => settings.fixed_node_id.as_ref().and_then(|fixed_id| {
+                pairs
+                    .iter()
+                    .find(|(node, health)| {
+                        &node.id == fixed_id && node.enabled && is_usable_health(health)
+                    })
+                    .map(|(node, _)| node.id.clone())
+            }),
             LineMode::Direct => None,
         };
         if settings.acceleration_enabled
@@ -808,7 +949,12 @@ impl AppCore {
         let selected = settings.current_node_id.as_ref().and_then(|id| {
             pairs
                 .iter()
-                .find(|(node, _)| &node.id == id)
+                .find(|(node, health)| {
+                    if &node.id != id || !node.enabled || !is_usable_health(health) {
+                        return false;
+                    }
+                    settings.line_mode != LineMode::Automatic || health.in_auto_pool
+                })
                 .map(|(node, _)| node)
         });
         let content =
@@ -891,7 +1037,7 @@ impl AppCore {
     }
 
     pub fn update_settings(&self, minutes: u32, log_level: &str) -> Result<AppSnapshot, String> {
-        if ![0, 15, 30, 60].contains(&minutes) {
+        if !HEALTH_CHECK_INTERVALS.contains(&minutes) {
             return Err("不支持的检测周期".into());
         }
         if !["error", "info", "debug"].contains(&log_level) {
@@ -951,6 +1097,12 @@ impl AppCore {
             return Ok(());
         }
         let pairs = self.node_pairs()?;
+        if settings.acceleration_enabled && self.select_current(&mut settings, &pairs).is_err() {
+            settings.acceleration_enabled = false;
+            settings.line_mode = LineMode::Direct;
+            settings.fixed_node_id = None;
+            settings.current_node_id = None;
+        }
         self.write_configuration(&mut settings, &pairs, &routes)?;
         atomic_write_json(&self.paths.settings, &settings)
     }
@@ -1181,6 +1333,112 @@ fn redact_import(input: &str) -> String {
     }
 }
 
+fn is_usable_health(health: &HealthSummary) -> bool {
+    matches!(health.status, NodeStatus::Available | NodeStatus::Slow)
+}
+
+fn select_auto_pool(
+    nodes: &[NodeDefinition],
+    health: &HashMap<String, HealthSummary>,
+    candidate_ids: &HashSet<String>,
+    required_id: Option<&str>,
+) -> HashSet<String> {
+    let mut candidates: Vec<_> = nodes
+        .iter()
+        .filter_map(|node| {
+            let summary = health.get(&node.id)?;
+            (node.enabled && candidate_ids.contains(&node.id) && is_usable_health(summary))
+                .then_some((node, summary))
+        })
+        .collect();
+    candidates.sort_by_key(|(_, summary)| git::health_score(summary));
+    let mut selected = HashSet::new();
+    if let Some(required_id) = required_id {
+        if candidates.iter().any(|(node, _)| node.id == required_id) {
+            selected.insert(required_id.to_string());
+        }
+    }
+    for (node, _) in candidates {
+        if selected.len() == BACKGROUND_HEALTHY_NODE_TARGET {
+            break;
+        }
+        selected.insert(node.id.clone());
+    }
+    selected
+}
+
+fn test_background_node_pool<F>(
+    nodes: &[NodeDefinition],
+    old_health: &HashMap<String, HealthSummary>,
+    test: F,
+    on_progress: impl Fn(usize, usize) + Sync,
+) -> Result<BackgroundNodeTestResult, String>
+where
+    F: Fn(&NodeDefinition, &HealthSummary) -> HealthSummary + Sync,
+{
+    let maintained: Vec<NodeDefinition> = nodes
+        .iter()
+        .filter(|node| {
+            node.enabled
+                && old_health
+                    .get(&node.id)
+                    .is_some_and(|summary| summary.in_auto_pool)
+        })
+        .take(BACKGROUND_HEALTHY_NODE_TARGET)
+        .cloned()
+        .collect();
+    let selected: HashSet<String> = maintained.iter().map(|node| node.id.clone()).collect();
+    let mut tested = test_nodes_bounded(&maintained, old_health, &test, |completed, total| {
+        on_progress(completed, total)
+    })?;
+
+    let mut usable = tested
+        .iter()
+        .filter(|(_, summary)| is_usable_health(summary))
+        .count();
+    if usable >= BACKGROUND_HEALTHY_NODE_MINIMUM {
+        let pool_ids = tested
+            .iter()
+            .filter(|(_, summary)| is_usable_health(summary))
+            .map(|(node_id, _)| node_id.clone())
+            .collect();
+        return Ok(BackgroundNodeTestResult { tested, pool_ids });
+    }
+
+    let discovery: Vec<NodeDefinition> = nodes
+        .iter()
+        .filter(|node| node.enabled && node.built_in && !selected.contains(&node.id))
+        .cloned()
+        .collect();
+    let mut cursor = 0;
+    let mut completed = tested.len();
+    while usable < BACKGROUND_HEALTHY_NODE_TARGET && cursor < discovery.len() {
+        let remaining = BACKGROUND_HEALTHY_NODE_TARGET - usable;
+        let batch_len = NODE_TEST_CONCURRENCY
+            .min(remaining)
+            .min(discovery.len() - cursor);
+        let batch = &discovery[cursor..cursor + batch_len];
+        let total = completed + batch_len;
+        let batch_results = test_nodes_bounded(batch, old_health, &test, |batch_completed, _| {
+            on_progress(completed + batch_completed, total)
+        })?;
+        for (_, summary) in &batch_results {
+            if is_usable_health(summary) {
+                usable += 1;
+            }
+        }
+        completed += batch_results.len();
+        tested.extend(batch_results);
+        cursor += batch_len;
+    }
+    let pool_ids = tested
+        .iter()
+        .filter(|(_, summary)| is_usable_health(summary))
+        .map(|(node_id, _)| node_id.clone())
+        .collect();
+    Ok(BackgroundNodeTestResult { tested, pool_ids })
+}
+
 fn test_nodes_bounded<F>(
     nodes: &[NodeDefinition],
     old_health: &HashMap<String, HealthSummary>,
@@ -1368,11 +1626,58 @@ mod tests {
             "https://fastgit.cc/https://github.com/"
         );
         assert_eq!(snapshot.settings.route_scope, RouteScope::Allowlist);
+        assert_eq!(
+            snapshot.settings.health_check_minutes,
+            DEFAULT_HEALTH_CHECK_MINUTES
+        );
         assert!(!snapshot.settings.acceleration_enabled);
         assert!(snapshot.nodes[0].node.built_in);
         assert_eq!(snapshot.nodes[0].node.id, FASTGIT_REWRITE_BASE);
         let cached: Vec<String> = load_json(&directory.path().join("system-nodes.json")).unwrap();
         assert_eq!(cached, vec![FASTGIT_REWRITE_BASE]);
+    }
+
+    #[test]
+    fn deletes_legacy_health_data_during_initialization() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        atomic_write_json(
+            &core.paths.health,
+            &serde_json::json!({
+                FASTGIT_REWRITE_BASE: {
+                    "status": "available",
+                    "successCount": 2,
+                    "attemptCount": 2,
+                    "medianLatencyMs": 100,
+                    "consecutiveFailures": 0,
+                    "checkedAt": null,
+                    "failureReason": null
+                }
+            }),
+        )
+        .unwrap();
+        drop(core);
+
+        let restarted = AppCore::new(directory.path().to_path_buf()).unwrap();
+
+        assert!(restarted.health().unwrap().is_empty());
+    }
+
+    #[test]
+    fn resets_legacy_health_check_interval_during_initialization() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let mut settings = core.settings().unwrap();
+        settings.health_check_minutes = 30;
+        settings.log_level = "debug".into();
+        atomic_write_json(&core.paths.settings, &settings).unwrap();
+        drop(core);
+
+        let restarted = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let settings = restarted.settings().unwrap();
+
+        assert_eq!(settings.health_check_minutes, DEFAULT_HEALTH_CHECK_MINUTES);
+        assert_eq!(settings.log_level, "debug");
     }
 
     #[test]
@@ -1464,6 +1769,52 @@ mod tests {
     }
 
     #[test]
+    fn catalog_refresh_resumes_acceleration_after_testing_replacement_nodes() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let settings = Settings {
+            acceleration_enabled: true,
+            route_scope: RouteScope::Global,
+            line_mode: LineMode::Fixed,
+            fixed_node_id: Some(FASTGIT_REWRITE_BASE.into()),
+            current_node_id: Some(FASTGIT_REWRITE_BASE.into()),
+            ..Settings::default()
+        };
+        atomic_write_json(&core.paths.settings, &settings).unwrap();
+        let accelerated = git::build_config(
+            &settings,
+            Some(&NodeDefinition::fastgit()),
+            &[],
+            Some(&core.paths.trace_socket),
+        )
+        .unwrap();
+        atomic_write(&core.paths.gitconfig, accelerated.as_bytes()).unwrap();
+
+        let changed = core
+            .apply_system_catalog_update(&encrypted_catalog(&["https://proxy.example"]), |_, _| {
+                HealthSummary {
+                    status: NodeStatus::Available,
+                    success_count: 1,
+                    attempt_count: 1,
+                    checked_at: Some(Utc::now()),
+                    ..HealthSummary::default()
+                }
+            })
+            .unwrap();
+
+        assert!(changed);
+        let persisted = core.settings().unwrap();
+        assert!(persisted.acceleration_enabled);
+        assert_eq!(persisted.line_mode, LineMode::Automatic);
+        assert_eq!(
+            persisted.current_node_id.as_deref(),
+            Some("https://proxy.example/https://github.com/")
+        );
+        let gitconfig = fs::read_to_string(&core.paths.gitconfig).unwrap();
+        assert!(gitconfig.contains("https://proxy.example/https://github.com/"));
+    }
+
+    #[test]
     fn full_node_tests_allow_only_one_active_run() {
         let directory = tempfile::tempdir().unwrap();
         let core = AppCore::new(directory.path().to_path_buf()).unwrap();
@@ -1477,6 +1828,24 @@ mod tests {
         );
         drop(active);
         assert!(core.full_node_test_lock.try_lock().is_some());
+    }
+
+    #[test]
+    fn blocked_background_test_does_not_report_progress() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let active = core.full_node_test_lock.lock();
+        let progress_reported = AtomicBool::new(false);
+
+        let result = core.test_background_nodes_with_progress(|_, _| {
+            progress_reported.store(true, Ordering::Relaxed);
+        });
+
+        assert!(result.is_err());
+        assert!(!progress_reported.load(Ordering::Relaxed));
+        drop(active);
     }
 
     #[test]
@@ -1510,37 +1879,40 @@ mod tests {
     }
 
     #[test]
-    fn catalog_refresh_waits_for_the_active_full_node_test() {
-        use std::{sync::mpsc, time::Duration};
-
+    fn catalog_refresh_prunes_removed_health_without_changing_node_test_state() {
         let directory = tempfile::tempdir().unwrap();
         let core = AppCore::new(directory.path().to_path_buf()).unwrap();
-        let active = core.full_node_test_lock.lock();
-        let (waiting, wait_started) = mpsc::channel();
-        let (acquired, slot_acquired) = mpsc::channel();
+        let mut health: HashMap<String, HealthSummary> = HashMap::new();
+        health.insert(
+            FASTGIT_REWRITE_BASE.into(),
+            HealthSummary {
+                status: NodeStatus::Available,
+                ..HealthSummary::default()
+            },
+        );
+        atomic_write_json(&core.paths.health, &health).unwrap();
+        *core.full_node_test_result.lock() = Some(Err("existing result".into()));
 
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                waiting.send(()).unwrap();
-                let _slot = core.acquire_full_node_test(true).unwrap();
-                acquired.send(()).unwrap();
-            });
-            wait_started.recv().unwrap();
-            assert!(slot_acquired
-                .recv_timeout(Duration::from_millis(30))
-                .is_err());
-            drop(active);
-            slot_acquired.recv_timeout(Duration::from_secs(1)).unwrap();
-        });
-    }
+        let changed = core
+            .apply_system_catalog_update(
+                &encrypted_catalog(&["https://proxy.example"]),
+                |_, previous| previous.clone(),
+            )
+            .unwrap();
 
-    #[test]
-    fn unchanged_catalog_does_not_queue_behind_an_active_test() {
-        let directory = tempfile::tempdir().unwrap();
-        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
-        let _active = core.full_node_test_lock.lock();
-
-        assert!(core.acquire_full_node_test(false).is_none());
+        assert!(changed);
+        assert!(!core.health().unwrap().contains_key(FASTGIT_REWRITE_BASE));
+        core.apply_system_catalog_update(
+            &encrypted_catalog(&["https://fastgit.cc"]),
+            |_, previous| previous.clone(),
+        )
+        .unwrap();
+        assert!(!core.health().unwrap().contains_key(FASTGIT_REWRITE_BASE));
+        assert!(core
+            .full_node_test_result
+            .lock()
+            .as_ref()
+            .is_some_and(|result| result.as_ref().unwrap_err() == "existing result"));
     }
 
     #[test]
@@ -1640,6 +2012,231 @@ mod tests {
     }
 
     #[test]
+    fn background_health_check_retests_at_most_ten_usable_nodes() {
+        let nodes: Vec<NodeDefinition> = (0..20)
+            .map(|index| NodeDefinition {
+                id: format!("node-{index}"),
+                name: format!("Node {index}"),
+                rewrite_base: format!("https://proxy-{index}.example/https://github.com/"),
+                enabled: true,
+                built_in: true,
+            })
+            .collect();
+        let health = nodes
+            .iter()
+            .map(|node| {
+                (
+                    node.id.clone(),
+                    HealthSummary {
+                        status: NodeStatus::Available,
+                        in_auto_pool: true,
+                        ..HealthSummary::default()
+                    },
+                )
+            })
+            .collect();
+
+        let result =
+            test_background_node_pool(&nodes, &health, |_, previous| previous.clone(), |_, _| {})
+                .unwrap();
+
+        assert_eq!(result.tested.len(), BACKGROUND_HEALTHY_NODE_TARGET);
+        assert_eq!(result.pool_ids.len(), BACKGROUND_HEALTHY_NODE_TARGET);
+        assert_eq!(
+            result
+                .tested
+                .iter()
+                .map(|(node_id, _)| node_id.as_str())
+                .collect::<Vec<_>>(),
+            (0..10)
+                .map(|index| format!("node-{index}"))
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn background_health_check_discovers_until_ten_when_pool_falls_below_five() {
+        let nodes: Vec<NodeDefinition> = (0..30)
+            .map(|index| NodeDefinition {
+                id: format!("node-{index}"),
+                name: format!("Node {index}"),
+                rewrite_base: format!("https://proxy-{index}.example/https://github.com/"),
+                enabled: true,
+                built_in: true,
+            })
+            .collect();
+        let health = nodes
+            .iter()
+            .take(4)
+            .map(|node| {
+                (
+                    node.id.clone(),
+                    HealthSummary {
+                        status: NodeStatus::Available,
+                        in_auto_pool: true,
+                        ..HealthSummary::default()
+                    },
+                )
+            })
+            .collect();
+
+        let result = test_background_node_pool(
+            &nodes,
+            &health,
+            |_, _| HealthSummary {
+                status: NodeStatus::Available,
+                ..HealthSummary::default()
+            },
+            |_, _| {},
+        )
+        .unwrap();
+
+        assert_eq!(result.tested.len(), BACKGROUND_HEALTHY_NODE_TARGET);
+        assert_eq!(result.pool_ids.len(), BACKGROUND_HEALTHY_NODE_TARGET);
+        assert_eq!(
+            result
+                .tested
+                .iter()
+                .filter(|(_, summary)| is_usable_health(summary))
+                .count(),
+            BACKGROUND_HEALTHY_NODE_TARGET
+        );
+    }
+
+    #[test]
+    fn background_health_check_does_not_discover_when_five_nodes_remain_usable() {
+        let nodes: Vec<NodeDefinition> = (0..20)
+            .map(|index| NodeDefinition {
+                id: format!("node-{index}"),
+                name: format!("Node {index}"),
+                rewrite_base: format!("https://proxy-{index}.example/https://github.com/"),
+                enabled: true,
+                built_in: true,
+            })
+            .collect();
+        let health = nodes
+            .iter()
+            .take(BACKGROUND_HEALTHY_NODE_MINIMUM)
+            .map(|node| {
+                (
+                    node.id.clone(),
+                    HealthSummary {
+                        status: NodeStatus::Available,
+                        in_auto_pool: true,
+                        ..HealthSummary::default()
+                    },
+                )
+            })
+            .collect();
+
+        let result =
+            test_background_node_pool(&nodes, &health, |_, previous| previous.clone(), |_, _| {})
+                .unwrap();
+
+        assert_eq!(result.tested.len(), BACKGROUND_HEALTHY_NODE_MINIMUM);
+        assert_eq!(result.pool_ids.len(), BACKGROUND_HEALTHY_NODE_MINIMUM);
+    }
+
+    #[test]
+    fn full_test_rebuilds_a_ten_node_automatic_pool() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let nodes: Vec<NodeDefinition> = (0..11)
+            .map(|index| NodeDefinition {
+                id: format!("node-{index}"),
+                name: format!("Node {index}"),
+                rewrite_base: format!("https://proxy-{index}.example/https://github.com/"),
+                enabled: true,
+                built_in: false,
+            })
+            .collect();
+        atomic_write_json(&core.paths.nodes, &nodes).unwrap();
+        let tested = nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| {
+                (
+                    node.id.clone(),
+                    HealthSummary {
+                        status: NodeStatus::Available,
+                        success_count: 1,
+                        attempt_count: 1,
+                        median_latency_ms: Some(index as u64 + 1),
+                        checked_at: Some(Utc::now()),
+                        ..HealthSummary::default()
+                    },
+                )
+            })
+            .collect();
+
+        core.persist_test_results(tested, AutomaticPoolUpdate::Rebuild)
+            .unwrap();
+        let health = core.health().unwrap();
+        let pool_ids: HashSet<_> = health
+            .iter()
+            .filter(|(_, summary)| summary.in_auto_pool)
+            .map(|(node_id, _)| node_id.as_str())
+            .collect();
+
+        assert_eq!(pool_ids.len(), BACKGROUND_HEALTHY_NODE_TARGET);
+        assert!(!pool_ids.contains("node-10"));
+
+        core.persist_test_results(
+            vec![("node-10".into(), health["node-10"].clone())],
+            AutomaticPoolUpdate::Include("node-10".into()),
+        )
+        .unwrap();
+        let health = core.health().unwrap();
+        assert!(health["node-10"].in_auto_pool);
+        assert_eq!(
+            health
+                .values()
+                .filter(|summary| summary.in_auto_pool)
+                .count(),
+            BACKGROUND_HEALTHY_NODE_TARGET
+        );
+    }
+
+    #[test]
+    fn automatic_selection_ignores_available_nodes_outside_the_pool() {
+        let pooled = NodeDefinition {
+            id: "pooled".into(),
+            name: "Pooled".into(),
+            rewrite_base: "https://pooled.example/https://github.com/".into(),
+            enabled: true,
+            built_in: true,
+        };
+        let outside = NodeDefinition {
+            id: "outside".into(),
+            name: "Outside".into(),
+            rewrite_base: "https://outside.example/https://github.com/".into(),
+            enabled: true,
+            built_in: true,
+        };
+        let pairs = vec![
+            (
+                outside,
+                HealthSummary {
+                    status: NodeStatus::Available,
+                    median_latency_ms: Some(1),
+                    ..HealthSummary::default()
+                },
+            ),
+            (
+                pooled,
+                HealthSummary {
+                    status: NodeStatus::Available,
+                    in_auto_pool: true,
+                    median_latency_ms: Some(100),
+                    ..HealthSummary::default()
+                },
+            ),
+        ];
+
+        assert_eq!(git::choose_node(&pairs).unwrap().id, "pooled");
+    }
+
+    #[test]
     fn imports_and_deduplicates_nodes() {
         let directory = tempfile::tempdir().unwrap();
         let core = AppCore::new(directory.path().to_path_buf()).unwrap();
@@ -1670,20 +2267,16 @@ mod tests {
     }
 
     #[test]
-    fn prepares_download_with_an_enabled_unverified_node() {
+    fn download_rejects_an_enabled_node_outside_the_automatic_pool() {
         let directory = tempfile::tempdir().unwrap();
         let core = AppCore::new(directory.path().to_path_buf()).unwrap();
-        let target = core
+        let error = core
             .prepare_download_excluding(
                 "https://github.com/ollama/ollama/releases/download/v1/OllamaSetup.exe",
                 &[],
             )
-            .unwrap();
-        assert_eq!(target.node_name, "fastgit.cc");
-        assert_eq!(
-            target.accelerated_url,
-            "https://fastgit.cc/https://github.com/ollama/ollama/releases/download/v1/OllamaSetup.exe"
-        );
+            .unwrap_err();
+        assert_eq!(error, "自动线路池中没有可用的下载节点");
     }
 
     #[test]
@@ -1701,6 +2294,7 @@ mod tests {
                 node.id.clone(),
                 HealthSummary {
                     status: NodeStatus::Available,
+                    in_auto_pool: true,
                     success_count: 1,
                     attempt_count: 1,
                     median_latency_ms: Some(if node.id == first.id { 10 } else { 20 }),
@@ -1733,7 +2327,7 @@ mod tests {
                 &[first.id.clone(), second.id.clone()],
             )
             .unwrap_err(),
-            "没有其他已检测可用的下载线路"
+            "自动线路池中没有其他可用的下载线路"
         );
     }
 

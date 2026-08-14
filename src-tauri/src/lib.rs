@@ -9,7 +9,7 @@ mod usage;
 use crate::{core::AppCore, models::*};
 use std::{
     path::{Path, PathBuf},
-    sync::atomic::{AtomicU64, Ordering},
+    sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 use tauri::{
@@ -80,7 +80,25 @@ where
 }
 
 fn emit_node_test_progress(app: &tauri::AppHandle, completed: usize, total: usize) {
-    let _ = app.emit("node-test-progress", NodeTestProgress { completed, total });
+    let _ = app.emit(
+        "node-test-progress",
+        NodeTestProgress {
+            completed,
+            total,
+            finished: false,
+        },
+    );
+}
+
+fn emit_node_test_finished(app: &tauri::AppHandle) {
+    let _ = app.emit(
+        "node-test-progress",
+        NodeTestProgress {
+            completed: 0,
+            total: 0,
+            finished: true,
+        },
+    );
 }
 
 #[tauri::command]
@@ -122,23 +140,18 @@ async fn test_all_nodes(app: tauri::AppHandle) -> CommandResult<Vec<NodeEntry>> 
                 emit_node_test_progress(&progress_app, completed, total);
             })
     })
-    .await?;
+    .await;
+    emit_node_test_finished(&app);
+    let result = result?;
     refresh_tray_from_core(&app);
     Ok(result)
 }
 
 #[tauri::command]
 async fn refresh_system_nodes(app: tauri::AppHandle) -> CommandResult<bool> {
-    let progress_app = app.clone();
     let worker_app = app.clone();
-    let result = run_node_test(move || {
-        worker_app
-            .state::<AppCore>()
-            .refresh_system_nodes_with_progress(|completed, total| {
-                emit_node_test_progress(&progress_app, completed, total);
-            })
-    })
-    .await?;
+    let result =
+        run_node_test(move || worker_app.state::<AppCore>().refresh_system_nodes()).await?;
     refresh_tray_from_core(&app);
     Ok(result)
 }
@@ -347,6 +360,7 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
                         .test_all_nodes_or_join_with_progress(|completed, total| {
                             emit_node_test_progress(&handle, completed, total)
                         });
+                    emit_node_test_finished(&handle);
                     match result {
                         Ok(_) => {
                             if let Ok(state) = handle.state::<AppCore>().snapshot() {
@@ -372,33 +386,45 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
 fn start_health_monitor(app: tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         let mut last_check = Instant::now();
+        let mut initial_discovery_pending = true;
         loop {
             tokio::time::sleep(Duration::from_secs(60)).await;
-            let minutes = app
-                .state::<AppCore>()
+            let core = app.state::<AppCore>();
+            let minutes = core
                 .snapshot()
                 .map(|state| state.settings.health_check_minutes)
                 .unwrap_or(0);
-            if minutes == 0 || last_check.elapsed() < Duration::from_secs(u64::from(minutes) * 60) {
+            let needs_initial_discovery = initial_discovery_pending
+                && core.needs_background_node_discovery().unwrap_or(false);
+            if !health_check_due(minutes, last_check.elapsed(), needs_initial_discovery) {
                 continue;
             }
-            last_check = Instant::now();
             let handle = app.clone();
-            let _ = tauri::async_runtime::spawn_blocking(move || {
-                if handle
+            let succeeded = tauri::async_runtime::spawn_blocking(move || {
+                let started = AtomicBool::new(false);
+                let result = handle
                     .state::<AppCore>()
-                    .test_all_nodes_with_progress(|completed, total| {
+                    .test_background_nodes_with_progress(|completed, total| {
+                        started.store(true, Ordering::Relaxed);
                         emit_node_test_progress(&handle, completed, total);
-                    })
-                    .is_ok()
-                {
+                    });
+                if started.load(Ordering::Relaxed) {
+                    emit_node_test_finished(&handle);
+                }
+                if result.is_ok() {
                     if let Ok(state) = handle.state::<AppCore>().snapshot() {
                         refresh_tray(&handle, &state);
                         let _ = handle.emit("snapshot-updated", state);
                     }
                 }
+                result.is_ok()
             })
-            .await;
+            .await
+            .unwrap_or(false);
+            if succeeded {
+                last_check = Instant::now();
+                initial_discovery_pending = false;
+            }
         }
     });
 }
@@ -409,9 +435,7 @@ fn start_system_node_monitor(app: tauri::AppHandle) {
             let handle = app.clone();
             let _ = tauri::async_runtime::spawn_blocking(move || {
                 let core = handle.state::<AppCore>();
-                if let Err(error) = core.refresh_system_nodes_with_progress(|completed, total| {
-                    emit_node_test_progress(&handle, completed, total);
-                }) {
+                if let Err(error) = core.refresh_system_nodes() {
                     core.system_node_refresh_failed(&error);
                 }
                 if let Ok(state) = core.snapshot() {
@@ -423,6 +447,11 @@ fn start_system_node_monitor(app: tauri::AppHandle) {
             tokio::time::sleep(Duration::from_secs(6 * 60 * 60)).await;
         }
     });
+}
+
+fn health_check_due(minutes: u32, elapsed: Duration, needs_initial_discovery: bool) -> bool {
+    minutes != 0
+        && (needs_initial_discovery || elapsed >= Duration::from_secs(u64::from(minutes) * 60))
 }
 
 pub fn run() {
@@ -488,8 +517,9 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{run_node_test, tray_labels};
+    use super::{health_check_due, run_node_test, tray_labels};
     use crate::models::{HealthSummary, NodeDefinition, NodeEntry, Settings};
+    use std::time::Duration;
 
     #[test]
     fn node_tests_run_off_the_calling_thread() {
@@ -528,5 +558,21 @@ mod tests {
             tray_labels(&disabled, &[node]),
             ("当前线路：GitHub 直连".into(), "开启加速")
         );
+    }
+
+    #[test]
+    fn health_check_schedule_honors_interval_and_disabled_setting() {
+        assert!(!health_check_due(0, Duration::from_secs(86_400), true));
+        assert!(!health_check_due(
+            24 * 60,
+            Duration::from_secs(6 * 60 * 60),
+            false
+        ));
+        assert!(health_check_due(
+            8 * 60,
+            Duration::from_secs(8 * 60 * 60),
+            false
+        ));
+        assert!(health_check_due(24 * 60, Duration::from_secs(60), true));
     }
 }

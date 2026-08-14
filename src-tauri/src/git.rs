@@ -190,19 +190,23 @@ pub fn choose_node<'a>(nodes: &'a [(NodeDefinition, HealthSummary)]) -> Option<&
     let mut candidates: Vec<_> = nodes
         .iter()
         .filter(|(node, health)| {
-            node.enabled && matches!(health.status, NodeStatus::Available | NodeStatus::Slow)
+            node.enabled
+                && health.in_auto_pool
+                && matches!(health.status, NodeStatus::Available | NodeStatus::Slow)
         })
         .collect();
-    candidates.sort_by_key(|(_, health)| {
-        let failure_penalty = u64::from(health.consecutive_failures) * 100_000;
-        let success_rate_penalty = if health.attempt_count == 0 {
-            100_000
-        } else {
-            100_000 - (u64::from(health.success_count) * 100_000 / u64::from(health.attempt_count))
-        };
-        failure_penalty + success_rate_penalty + health.median_latency_ms.unwrap_or(u64::MAX / 4)
-    });
+    candidates.sort_by_key(|(_, health)| health_score(health));
     candidates.first().map(|(node, _)| node)
+}
+
+pub fn health_score(health: &HealthSummary) -> u64 {
+    let failure_penalty = u64::from(health.consecutive_failures) * 100_000;
+    let success_rate_penalty = if health.attempt_count == 0 {
+        100_000
+    } else {
+        100_000 - (u64::from(health.success_count) * 100_000 / u64::from(health.attempt_count))
+    };
+    failure_penalty + success_rate_penalty + health.median_latency_ms.unwrap_or(u64::MAX / 4)
 }
 
 pub fn build_config(
