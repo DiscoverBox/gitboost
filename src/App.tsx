@@ -32,7 +32,7 @@ function NodeTestProgressLine({ progress }: { progress: NodeTestProgress | null 
   if (!progress || progress.total === 0) return null;
   const percent = Math.round((progress.completed / progress.total) * 100);
   return (
-    <div className="node-test-progress" role="progressbar" aria-label={`线路检测进度 ${progress.completed}/${progress.total}`} aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.completed}>
+    <div className="node-test-progress" role="progressbar" aria-label={`可用线路 ${progress.completed}/${progress.total}`} aria-valuemin={0} aria-valuemax={progress.total} aria-valuenow={progress.completed}>
       <span style={{ width: `${percent}%` }} />
     </div>
   );
@@ -199,10 +199,10 @@ function Overview({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, go }
 
       {!snapshot.environment.gitAvailable && <div className="notice notice--danger"><strong>未检测到系统 Git</strong><p>请先安装 Git（Windows 推荐 Git for Windows），然后再开启加速。</p></div>}
       {snapshot.environment.conflictScanError ? <div className="notice notice--danger"><strong>URL 重写冲突检查失败</strong><p>{snapshot.environment.conflictScanError}</p><Button tone="quiet" onClick={() => go("diagnostics")}>查看诊断</Button></div> : snapshot.environment.conflicts > 0 && <div className="notice notice--warning"><strong>发现 {snapshot.environment.conflicts} 条 URL 重写冲突</strong><p>GitBoost 不会覆盖它们。请先到环境诊断查看来源。</p><Button tone="quiet" onClick={() => go("diagnostics")}>查看诊断</Button></div>}
-      {!usable.length && <div className="notice"><strong>自动线路池中还没有可用线路</strong><p>系统线路和自定义节点都必须先通过真实 Git 检测。</p><Button tone="quiet" busy={busy === "test-all" || nodeTestRunning} busyLabel={nodeTestProgress ? `检测中 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "线路检测完成").catch(() => undefined)}>立即检测</Button></div>}
+      {!usable.length && <div className="notice"><strong>自动线路池中还没有可用线路</strong><p>系统线路和自定义节点都必须先通过真实 Git 检测。</p><Button tone="quiet" busy={busy === "test-all" || nodeTestRunning} busyLabel={nodeTestProgress ? `可用 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "线路检测完成").catch(() => undefined)}>立即检测</Button></div>}
 
       <section className="section-block">
-        <div className="section-title"><div><h2>线路控制</h2><p>切换只影响下一次 Git 操作；已开始的 clone 需要手动重试。</p></div><Button busy={busy === "test-all" || nodeTestRunning} busyLabel={nodeTestProgress ? `检测中 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "节点检测完成").catch(() => undefined)}>重新测速</Button></div>
+        <div className="section-title"><div><h2>线路控制</h2><p>切换只影响下一次 Git 操作；已开始的 clone 需要手动重试。</p></div><Button busy={busy === "test-all" || nodeTestRunning} busyLabel={nodeTestProgress ? `可用 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "节点检测完成").catch(() => undefined)}>重新测速</Button></div>
         <NodeTestProgressLine progress={nodeTestProgress} />
         <div className="control-row">
           <label>线路模式</label>
@@ -223,7 +223,7 @@ function CustomNodeSettings({ snapshot, busy, nodeTestProgress, nodeTestRunning,
     <section className="section-block node-settings" aria-labelledby="custom-nodes-title">
       <div className="section-title">
         <div><h2 id="custom-nodes-title">自定义节点</h2><p>添加并管理自己的代理地址；系统节点仍由 GitBoost 自动维护。</p></div>
-        <div className="section-actions"><Button onClick={onImport}>添加节点</Button><Button busy={busy === "test-all" || nodeTestRunning} busyLabel={nodeTestProgress ? `检测中 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "全部线路检测完成").catch(() => undefined)}>检测全部</Button></div>
+        <div className="section-actions"><Button onClick={onImport}>添加节点</Button><Button busy={busy === "test-all" || nodeTestRunning} busyLabel={nodeTestProgress ? `可用 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "线路检测完成").catch(() => undefined)}>检测线路</Button></div>
       </div>
       <NodeTestProgressLine progress={nodeTestProgress} />
       <div className="node-settings-list">
@@ -464,7 +464,7 @@ function Settings({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, onIm
     <div className="page">
       <PageHeader eyebrow="本机偏好" title="设置" description="GitBoost 不上传使用数据；节点、健康状态和诊断日志均保存在本机。" actions={<Button tone="primary" busy={busy === "settings-save"} onClick={() => run("settings-save", () => api.updateSettings(minutes, logLevel), "设置已保存").catch(() => undefined)}>保存设置</Button>} />
       <section className="settings-list">
-        <div className="setting-row"><div><strong>后台健康检查</strong><p>维护最多 10 条可用线路；少于 5 条时才从系统线路补充。</p></div><select value={minutes} onChange={(event) => setMinutes(Number(event.target.value))}><option value={0}>关闭</option><option value={60}>每小时</option><option value={480}>每 8 小时</option><option value={1440}>每天</option><option value={10080}>每周</option><option value={43200}>每月</option></select></div>
+        <div className="setting-row"><div><strong>后台健康检查</strong><p>维护 10 条可用线路；不足时继续检测，找到 10 条后停止。</p></div><select value={minutes} onChange={(event) => setMinutes(Number(event.target.value))}><option value={0}>关闭</option><option value={60}>每小时</option><option value={480}>每 8 小时</option><option value={1440}>每天</option><option value={10080}>每周</option><option value={43200}>每月</option></select></div>
         <div className="setting-row"><div><strong>登录时启动</strong><p>保持托盘运行，以便节点失效后重新选路。</p></div><Switch label="登录时启动" checked={launchAtLogin} onChange={(enabled) => setAutostart(enabled).catch(() => undefined)} /></div>
         <div className="setting-row"><div><strong>日志级别</strong><p>日志会移除凭据、查询参数和命令环境。</p></div><select value={logLevel} onChange={(event) => setLogLevel(event.target.value as "error" | "info" | "debug")}><option value="error">仅错误</option><option value="info">信息</option><option value="debug">调试</option></select></div>
       </section>

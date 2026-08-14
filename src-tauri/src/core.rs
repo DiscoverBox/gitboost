@@ -38,8 +38,7 @@ const SYSTEM_NODE_CATALOG_KEY: [u8; 32] = [
 const MAX_SYSTEM_NODES: usize = 100;
 const CATALOG_MAX_BYTES: usize = 262_144;
 const NODE_TEST_CONCURRENCY: usize = 4;
-const BACKGROUND_HEALTHY_NODE_TARGET: usize = 10;
-const BACKGROUND_HEALTHY_NODE_MINIMUM: usize = 5;
+const AUTO_POOL_NODE_TARGET: usize = 10;
 const HEALTH_CHECK_INTERVALS: [u32; 6] = [
     0,
     60,
@@ -63,7 +62,7 @@ struct CatalogUpdate {
     recovery_applied_at: Option<chrono::DateTime<Utc>>,
 }
 
-struct BackgroundNodeTestResult {
+struct NodePoolTestResult {
     tested: Vec<(String, HealthSummary)>,
     pool_ids: HashSet<String>,
 }
@@ -237,7 +236,7 @@ impl AppCore {
             *self.full_node_test_result.lock() = None;
             let nodes = self.nodes()?;
             let old_health = self.health()?;
-            let result = test_background_node_pool(&nodes, &old_health, test, |_, _| {})?;
+            let result = test_node_pool(&nodes, &old_health, test, |_, _| {})?;
             self.persist_test_results(
                 result.tested,
                 AutomaticPoolUpdate::Replace(result.pool_ids),
@@ -564,7 +563,7 @@ impl AppCore {
         let _run = self
             .full_node_test_lock
             .try_lock()
-            .ok_or_else(|| "全量线路检测正在进行，请稍后再试".to_string())?;
+            .ok_or_else(|| "线路检测正在进行，请稍后再试".to_string())?;
         self.execute_full_node_test_locked(&on_progress)
     }
 
@@ -614,14 +613,10 @@ impl AppCore {
     where
         F: Fn(usize, usize) + Sync,
     {
-        let nodes: Vec<NodeDefinition> = self
-            .nodes()?
-            .into_iter()
-            .filter(|node| node.enabled)
-            .collect();
+        let nodes = self.nodes()?;
         let old_health = self.health()?;
-        let tested = test_nodes_bounded(&nodes, &old_health, git::test_node, on_progress)?;
-        self.persist_test_results(tested, AutomaticPoolUpdate::Rebuild)
+        let result = test_node_pool(&nodes, &old_health, git::test_node, on_progress)?;
+        self.persist_test_results(result.tested, AutomaticPoolUpdate::Rebuild)
     }
 
     fn test_background_nodes_locked<F>(&self, on_progress: &F) -> Result<Vec<NodeEntry>, String>
@@ -630,7 +625,7 @@ impl AppCore {
     {
         let nodes = self.nodes()?;
         let old_health = self.health()?;
-        let result = test_background_node_pool(&nodes, &old_health, git::test_node, on_progress)?;
+        let result = test_node_pool(&nodes, &old_health, git::test_node, on_progress)?;
         self.persist_test_results(result.tested, AutomaticPoolUpdate::Replace(result.pool_ids))
     }
 
@@ -689,7 +684,7 @@ impl AppCore {
                         .is_some_and(|summary| summary.in_auto_pool && is_usable_health(summary))
             })
             .count()
-            < BACKGROUND_HEALTHY_NODE_MINIMUM)
+            < AUTO_POOL_NODE_TARGET)
     }
 
     fn resume_acceleration_after_catalog_refresh(
@@ -1430,7 +1425,7 @@ fn select_auto_pool(
         }
     }
     for (node, _) in candidates {
-        if selected.len() == BACKGROUND_HEALTHY_NODE_TARGET {
+        if selected.len() == AUTO_POOL_NODE_TARGET {
             break;
         }
         selected.insert(node.id.clone());
@@ -1438,15 +1433,26 @@ fn select_auto_pool(
     selected
 }
 
-fn test_background_node_pool<F>(
+fn test_node_pool<F>(
     nodes: &[NodeDefinition],
     old_health: &HashMap<String, HealthSummary>,
     test: F,
     on_progress: impl Fn(usize, usize) + Sync,
-) -> Result<BackgroundNodeTestResult, String>
+) -> Result<NodePoolTestResult, String>
 where
     F: Fn(&NodeDefinition, &HealthSummary) -> HealthSummary + Sync,
 {
+    let usable_count = Mutex::new(0usize);
+    on_progress(0, AUTO_POOL_NODE_TARGET);
+    let test_and_report = |node: &NodeDefinition, previous: &HealthSummary| {
+        let summary = test(node, previous);
+        if is_usable_health(&summary) {
+            let mut usable = usable_count.lock();
+            *usable += 1;
+            on_progress(*usable, AUTO_POOL_NODE_TARGET);
+        }
+        summary
+    };
     let maintained: Vec<NodeDefinition> = nodes
         .iter()
         .filter(|node| {
@@ -1455,50 +1461,36 @@ where
                     .get(&node.id)
                     .is_some_and(|summary| summary.in_auto_pool)
         })
-        .take(BACKGROUND_HEALTHY_NODE_TARGET)
+        .take(AUTO_POOL_NODE_TARGET)
         .cloned()
         .collect();
     let selected: HashSet<String> = maintained.iter().map(|node| node.id.clone()).collect();
-    let mut tested = test_nodes_bounded(&maintained, old_health, &test, |completed, total| {
-        on_progress(completed, total)
-    })?;
+    let mut tested = test_nodes_bounded(&maintained, old_health, &test_and_report, |_, _| {})?;
 
-    let mut usable = tested
-        .iter()
-        .filter(|(_, summary)| is_usable_health(summary))
-        .count();
-    if usable >= BACKGROUND_HEALTHY_NODE_MINIMUM {
+    let mut usable = *usable_count.lock();
+    if usable >= AUTO_POOL_NODE_TARGET {
         let pool_ids = tested
             .iter()
             .filter(|(_, summary)| is_usable_health(summary))
             .map(|(node_id, _)| node_id.clone())
             .collect();
-        return Ok(BackgroundNodeTestResult { tested, pool_ids });
+        return Ok(NodePoolTestResult { tested, pool_ids });
     }
 
     let discovery: Vec<NodeDefinition> = nodes
         .iter()
-        .filter(|node| node.enabled && node.built_in && !selected.contains(&node.id))
+        .filter(|node| node.enabled && !selected.contains(&node.id))
         .cloned()
         .collect();
     let mut cursor = 0;
-    let mut completed = tested.len();
-    while usable < BACKGROUND_HEALTHY_NODE_TARGET && cursor < discovery.len() {
-        let remaining = BACKGROUND_HEALTHY_NODE_TARGET - usable;
+    while usable < AUTO_POOL_NODE_TARGET && cursor < discovery.len() {
+        let remaining = AUTO_POOL_NODE_TARGET - usable;
         let batch_len = NODE_TEST_CONCURRENCY
             .min(remaining)
             .min(discovery.len() - cursor);
         let batch = &discovery[cursor..cursor + batch_len];
-        let total = completed + batch_len;
-        let batch_results = test_nodes_bounded(batch, old_health, &test, |batch_completed, _| {
-            on_progress(completed + batch_completed, total)
-        })?;
-        for (_, summary) in &batch_results {
-            if is_usable_health(summary) {
-                usable += 1;
-            }
-        }
-        completed += batch_results.len();
+        let batch_results = test_nodes_bounded(batch, old_health, &test_and_report, |_, _| {})?;
+        usable = *usable_count.lock();
         tested.extend(batch_results);
         cursor += batch_len;
     }
@@ -1507,7 +1499,7 @@ where
         .filter(|(_, summary)| is_usable_health(summary))
         .map(|(node_id, _)| node_id.clone())
         .collect();
-    Ok(BackgroundNodeTestResult { tested, pool_ids })
+    Ok(NodePoolTestResult { tested, pool_ids })
 }
 
 fn test_nodes_bounded<F>(
@@ -2059,7 +2051,7 @@ mod tests {
             core.test_all_nodes_with_progress(|_, _| {})
                 .err()
                 .as_deref(),
-            Some("全量线路检测正在进行，请稍后再试")
+            Some("线路检测正在进行，请稍后再试")
         );
         drop(active);
         assert!(core.full_node_test_lock.try_lock().is_some());
@@ -2272,11 +2264,10 @@ mod tests {
             .collect();
 
         let result =
-            test_background_node_pool(&nodes, &health, |_, previous| previous.clone(), |_, _| {})
-                .unwrap();
+            test_node_pool(&nodes, &health, |_, previous| previous.clone(), |_, _| {}).unwrap();
 
-        assert_eq!(result.tested.len(), BACKGROUND_HEALTHY_NODE_TARGET);
-        assert_eq!(result.pool_ids.len(), BACKGROUND_HEALTHY_NODE_TARGET);
+        assert_eq!(result.tested.len(), AUTO_POOL_NODE_TARGET);
+        assert_eq!(result.pool_ids.len(), AUTO_POOL_NODE_TARGET);
         assert_eq!(
             result
                 .tested
@@ -2290,7 +2281,7 @@ mod tests {
     }
 
     #[test]
-    fn background_health_check_discovers_until_ten_when_pool_falls_below_five() {
+    fn node_pool_detection_discovers_until_ten_from_a_partial_pool() {
         let nodes: Vec<NodeDefinition> = (0..30)
             .map(|index| NodeDefinition {
                 id: format!("node-{index}"),
@@ -2315,7 +2306,7 @@ mod tests {
             })
             .collect();
 
-        let result = test_background_node_pool(
+        let result = test_node_pool(
             &nodes,
             &health,
             |_, _| HealthSummary {
@@ -2326,32 +2317,32 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(result.tested.len(), BACKGROUND_HEALTHY_NODE_TARGET);
-        assert_eq!(result.pool_ids.len(), BACKGROUND_HEALTHY_NODE_TARGET);
+        assert_eq!(result.tested.len(), AUTO_POOL_NODE_TARGET);
+        assert_eq!(result.pool_ids.len(), AUTO_POOL_NODE_TARGET);
         assert_eq!(
             result
                 .tested
                 .iter()
                 .filter(|(_, summary)| is_usable_health(summary))
                 .count(),
-            BACKGROUND_HEALTHY_NODE_TARGET
+            AUTO_POOL_NODE_TARGET
         );
     }
 
     #[test]
-    fn background_health_check_does_not_discover_when_five_nodes_remain_usable() {
+    fn node_pool_detection_fills_to_ten_with_custom_nodes() {
         let nodes: Vec<NodeDefinition> = (0..20)
             .map(|index| NodeDefinition {
                 id: format!("node-{index}"),
                 name: format!("Node {index}"),
                 rewrite_base: format!("https://proxy-{index}.example/https://github.com/"),
                 enabled: true,
-                built_in: true,
+                built_in: false,
             })
             .collect();
         let health = nodes
             .iter()
-            .take(BACKGROUND_HEALTHY_NODE_MINIMUM)
+            .take(5)
             .map(|node| {
                 (
                     node.id.clone(),
@@ -2364,12 +2355,66 @@ mod tests {
             })
             .collect();
 
-        let result =
-            test_background_node_pool(&nodes, &health, |_, previous| previous.clone(), |_, _| {})
-                .unwrap();
+        let result = test_node_pool(
+            &nodes,
+            &health,
+            |_, _| HealthSummary {
+                status: NodeStatus::Available,
+                ..HealthSummary::default()
+            },
+            |_, _| {},
+        )
+        .unwrap();
 
-        assert_eq!(result.tested.len(), BACKGROUND_HEALTHY_NODE_MINIMUM);
-        assert_eq!(result.pool_ids.len(), BACKGROUND_HEALTHY_NODE_MINIMUM);
+        assert_eq!(result.tested.len(), AUTO_POOL_NODE_TARGET);
+        assert_eq!(result.pool_ids.len(), AUTO_POOL_NODE_TARGET);
+    }
+
+    #[test]
+    fn node_pool_detection_continues_past_failures_and_stops_at_ten_usable_nodes() {
+        let nodes: Vec<NodeDefinition> = (0..30)
+            .map(|index| NodeDefinition {
+                id: format!("node-{index}"),
+                name: format!("Node {index}"),
+                rewrite_base: format!("https://proxy-{index}.example/https://github.com/"),
+                enabled: true,
+                built_in: true,
+            })
+            .collect();
+
+        let progress = Mutex::new(Vec::new());
+        let result = test_node_pool(
+            &nodes,
+            &HashMap::new(),
+            |node, _| HealthSummary {
+                status: if node
+                    .id
+                    .strip_prefix("node-")
+                    .unwrap()
+                    .parse::<usize>()
+                    .unwrap()
+                    % 2
+                    == 0
+                {
+                    NodeStatus::Available
+                } else {
+                    NodeStatus::Unavailable
+                },
+                ..HealthSummary::default()
+            },
+            |completed, total| progress.lock().push((completed, total)),
+        )
+        .unwrap();
+
+        assert_eq!(result.tested.len(), 19);
+        assert_eq!(result.pool_ids.len(), AUTO_POOL_NODE_TARGET);
+        assert_eq!(result.tested.last().unwrap().0, "node-18");
+        assert_eq!(
+            progress.into_inner(),
+            (0..=AUTO_POOL_NODE_TARGET)
+                .map(|completed| (completed, AUTO_POOL_NODE_TARGET))
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -2413,7 +2458,7 @@ mod tests {
             .map(|(node_id, _)| node_id.as_str())
             .collect();
 
-        assert_eq!(pool_ids.len(), BACKGROUND_HEALTHY_NODE_TARGET);
+        assert_eq!(pool_ids.len(), AUTO_POOL_NODE_TARGET);
         assert!(!pool_ids.contains("node-10"));
 
         core.persist_test_results(
@@ -2428,7 +2473,7 @@ mod tests {
                 .values()
                 .filter(|summary| summary.in_auto_pool)
                 .count(),
-            BACKGROUND_HEALTHY_NODE_TARGET
+            AUTO_POOL_NODE_TARGET
         );
     }
 
@@ -2723,11 +2768,15 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         let progress = progress.into_inner();
-        let total = core.nodes().unwrap().len();
+        let usable = owner_result
+            .iter()
+            .filter(|node| is_usable_health(&node.health))
+            .count();
+        assert!(usable <= AUTO_POOL_NODE_TARGET);
         assert_eq!(
             progress,
-            (0..=total)
-                .map(|completed| (completed, total))
+            (0..=usable)
+                .map(|completed| (completed, AUTO_POOL_NODE_TARGET))
                 .collect::<Vec<_>>()
         );
 

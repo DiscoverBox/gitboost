@@ -138,7 +138,7 @@ test("file download can retry with the next available line", async ({ page }) =>
   expect(calls.some(({ command }) => command === "set_line_mode")).toBe(false);
 });
 
-test("full node detection shows determinate progress", async ({ page }) => {
+test("node detection shows usable-node target progress", async ({ page }) => {
   await page.addInitScript(() => {
     const snapshot: AppSnapshot = {
       settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
@@ -166,7 +166,7 @@ test("full node detection shows determinate progress", async ({ page }) => {
           }
           if (command === "plugin:event|unlisten") return undefined;
           if (command === "test_all_nodes") {
-            listeners.get("node-test-progress")?.({ event: "node-test-progress", id: 1, payload: { completed: 7, total: 18, finished: false } });
+            listeners.get("node-test-progress")?.({ event: "node-test-progress", id: 1, payload: { completed: 7, total: 10, finished: false } });
             return new Promise((resolve) => { completeNodeTest = () => {
               listeners.get("node-test-progress")?.({ event: "node-test-progress", id: 1, payload: { completed: 0, total: 0, finished: true } });
               resolve(snapshot.nodes);
@@ -188,22 +188,22 @@ test("full node detection shows determinate progress", async ({ page }) => {
   await page.goto("/");
   const lineControl = page.locator(".section-title").filter({ has: page.getByRole("heading", { name: "线路控制" }) });
 
-  await page.evaluate(() => (window as typeof window & { emitNodeTestProgress: (completed: number, total: number) => void }).emitNodeTestProgress(3, 18));
-  await expect(lineControl.getByRole("button", { name: "检测中 3/18" })).toBeDisabled();
-  await expect(page.getByRole("progressbar", { name: "线路检测进度 3/18" })).toBeVisible();
-  await page.evaluate(() => (window as typeof window & { emitNodeTestProgress: (completed: number, total: number) => void }).emitNodeTestProgress(18, 18));
-  await expect(page.getByRole("progressbar", { name: "线路检测进度 18/18" })).toBeVisible();
+  await page.evaluate(() => (window as typeof window & { emitNodeTestProgress: (completed: number, total: number) => void }).emitNodeTestProgress(3, 10));
+  await expect(lineControl.getByRole("button", { name: "可用 3/10" })).toBeDisabled();
+  await expect(page.getByRole("progressbar", { name: "可用线路 3/10" })).toBeVisible();
+  await page.evaluate(() => (window as typeof window & { emitNodeTestProgress: (completed: number, total: number) => void }).emitNodeTestProgress(10, 10));
+  await expect(page.getByRole("progressbar", { name: "可用线路 10/10" })).toBeVisible();
   await page.evaluate(() => (window as typeof window & { emitNodeTestFinished: () => void }).emitNodeTestFinished());
   await expect(page.getByRole("progressbar")).toHaveCount(0);
   await expect(lineControl.getByRole("button", { name: "重新测速" })).toBeEnabled();
 
   await lineControl.getByRole("button", { name: "重新测速" }).click();
 
-  await expect(lineControl.getByRole("button", { name: "检测中 7/18" })).toBeDisabled();
-  const progress = page.getByRole("progressbar", { name: "线路检测进度 7/18" });
+  await expect(lineControl.getByRole("button", { name: "可用 7/10" })).toBeDisabled();
+  const progress = page.getByRole("progressbar", { name: "可用线路 7/10" });
   await expect(progress).toHaveAttribute("aria-valuenow", "7");
   const fillRatio = await progress.locator("span").evaluate((fill) => fill.clientWidth / fill.parentElement!.clientWidth);
-  expect(fillRatio).toBeCloseTo(7 / 18, 2);
+  expect(fillRatio).toBeCloseTo(7 / 10, 2);
 
   await page.evaluate(() => (window as typeof window & { completeNodeTest: () => void }).completeNodeTest());
   await expect(page.locator(".toast")).toHaveText("节点检测完成");
