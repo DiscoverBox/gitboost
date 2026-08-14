@@ -1,0 +1,26 @@
+name: Refresh CDN cache
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - nodes.json
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Test cache refresh script
+        run: node --test scripts/refresh-cdn-cache.test.mjs
+      - name: Refresh CDN cache
+        run: node scripts/refresh-cdn-cache.mjs

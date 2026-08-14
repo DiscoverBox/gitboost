@@ -62,6 +62,11 @@ async fn test_all_nodes(app: tauri::AppHandle) -> CommandResult<Vec<NodeEntry>> 
 }
 
 #[tauri::command]
+async fn refresh_system_nodes(app: tauri::AppHandle) -> CommandResult<bool> {
+    run_node_test(move || app.state::<AppCore>().refresh_system_nodes()).await
+}
+
+#[tauri::command]
 fn rename_node(
     core: State<'_, AppCore>,
     node_id: String,
@@ -365,6 +370,7 @@ pub fn run() {
             export_nodes,
             test_node,
             test_all_nodes,
+            refresh_system_nodes,
             rename_node,
             set_node_enabled,
             delete_node,

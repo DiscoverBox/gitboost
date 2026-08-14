@@ -223,7 +223,20 @@ function CustomNodeSettings({ snapshot, busy, run, onImport }: { snapshot: AppSn
         ))}
         {!customNodes.length && <div className="empty-state compact"><strong>还没有自定义节点</strong><p>通常无需添加，GitBoost 会自动使用系统线路。</p></div>}
       </div>
-      <p className="node-settings-note">系统线路 {systemCount} 个 · 使用公开仓库进行隔离检测，不修改全局 Git 配置</p>
+      <div className="node-settings-note">
+        <span>系统线路 {systemCount} 个 · 使用公开仓库进行隔离检测，不修改全局 Git 配置</span>
+        <Button
+          tone="quiet"
+          busy={busy === "refresh-system-nodes"}
+          onClick={() => run(
+            "refresh-system-nodes",
+            api.refreshSystemNodes,
+            (changed) => changed ? "系统线路已更新" : "系统线路已是最新",
+          ).catch(() => undefined)}
+        >
+          刷新系统线路
+        </Button>
+      </div>
       {editing && <ManageNode node={editing} busy={busy} run={run} onClose={() => setEditing(null)} />}
     </section>
   );

@@ -17,6 +17,8 @@ path = "src/main.rs"
 tauri-build = { version = "2.4", features = [] }
 
 [dependencies]
+aes-gcm = "0.10"
+base64 = "0.22"
 chrono = { version = "0.4", features = ["serde"] }
 parking_lot = "0.12"
 serde = { version = "1", features = ["derive"] }

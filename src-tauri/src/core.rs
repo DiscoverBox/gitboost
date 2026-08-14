@@ -10,9 +10,11 @@ use crate::{
     },
     usage::CompletedTrace,
 };
+use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use chrono::Utc;
 use parking_lot::Mutex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     fs,
@@ -25,7 +27,11 @@ use uuid::Uuid;
 
 const SYSTEM_NODE_CATALOG_URLS: [&str; 2] = [
     "https://cdn.jsdelivr.net/gh/DiscoverBox/gitboost@main/nodes.json",
-    "https://cdn.jsdmirror.com/gh/DiscoverBox/gitboost@main/nodes.json",
+    "https://cdn.jsdmirror.cn/gh/DiscoverBox/gitboost@main/nodes.json",
+];
+const SYSTEM_NODE_CATALOG_KEY: [u8; 32] = [
+    0x2d, 0xbf, 0x43, 0xf2, 0x77, 0xa1, 0x09, 0x79, 0xcb, 0x9e, 0x06, 0xe7, 0x2b, 0x0d, 0xdb, 0x71,
+    0x0c, 0xb6, 0x0d, 0x23, 0xb1, 0xb7, 0xc4, 0x65, 0x4a, 0xa1, 0xf6, 0x73, 0x46, 0x7b, 0xd9, 0x69,
 ];
 const MAX_SYSTEM_NODES: usize = 100;
 const CATALOG_MAX_BYTES: &str = "262144";
@@ -43,6 +49,13 @@ pub struct AppCore {
 struct CatalogUpdate {
     changed: bool,
     recovery_applied_at: Option<chrono::DateTime<Utc>>,
+}
+
+#[derive(Deserialize)]
+struct EncryptedSystemCatalog {
+    version: u8,
+    nonce: String,
+    ciphertext: String,
 }
 
 #[derive(Debug)]
@@ -1150,8 +1163,27 @@ fn normalize_system_urls(urls: Vec<String>) -> Result<Vec<String>, String> {
 }
 
 fn parse_system_catalog(bytes: &[u8]) -> Result<Vec<String>, String> {
-    let urls: Vec<String> =
+    let catalog: EncryptedSystemCatalog =
         serde_json::from_slice(bytes).map_err(|error| format!("系统节点目录格式错误：{error}"))?;
+    if catalog.version != 1 {
+        return Err(format!("不支持的系统节点目录版本：{}", catalog.version));
+    }
+    let nonce = BASE64
+        .decode(catalog.nonce)
+        .map_err(|_| "系统节点目录 nonce 无效".to_string())?;
+    if nonce.len() != 12 {
+        return Err("系统节点目录 nonce 长度无效".into());
+    }
+    let ciphertext = BASE64
+        .decode(catalog.ciphertext)
+        .map_err(|_| "系统节点目录密文无效".to_string())?;
+    let cipher = Aes256Gcm::new_from_slice(&SYSTEM_NODE_CATALOG_KEY)
+        .map_err(|_| "系统节点目录密钥无效".to_string())?;
+    let plaintext = cipher
+        .decrypt(Nonce::from_slice(&nonce), ciphertext.as_ref())
+        .map_err(|_| "系统节点目录解密失败".to_string())?;
+    let urls: Vec<String> = serde_json::from_slice(&plaintext)
+        .map_err(|error| format!("系统节点目录内容无效：{error}"))?;
     normalize_system_urls(urls)
 }
 
@@ -1219,6 +1251,21 @@ fn hide_catalog_console(_command: &mut Command) {}
 mod tests {
     use super::*;
 
+    fn encrypted_catalog(urls: &[&str]) -> Vec<u8> {
+        let nonce = [0u8; 12];
+        let cipher = Aes256Gcm::new_from_slice(&SYSTEM_NODE_CATALOG_KEY).unwrap();
+        let plaintext = serde_json::to_vec(urls).unwrap();
+        let ciphertext = cipher
+            .encrypt(Nonce::from_slice(&nonce), plaintext.as_ref())
+            .unwrap();
+        serde_json::to_vec(&serde_json::json!({
+            "version": 1,
+            "nonce": BASE64.encode(nonce),
+            "ciphertext": BASE64.encode(ciphertext),
+        }))
+        .unwrap()
+    }
+
     #[test]
     fn seeds_fastgit_and_safe_defaults() {
         let directory = tempfile::tempdir().unwrap();
@@ -1237,19 +1284,28 @@ mod tests {
     }
 
     #[test]
-    fn system_catalog_is_a_normalized_url_array() {
-        let urls = parse_system_catalog(
-            br#"["https://fastgit.cc", "https://fastgit.cc/https://github.com/"]"#,
-        )
-        .unwrap();
-        assert_eq!(urls, vec![FASTGIT_REWRITE_BASE]);
-        assert!(parse_system_catalog(br#"[]"#).is_err());
-        assert!(parse_system_catalog(br#"["http://proxy.example"]"#).is_err());
-        assert!(parse_system_catalog(br#"{"nodes":[]}"#).is_err());
+    fn system_catalog_is_encrypted_and_authenticated() {
+        let bytes = include_bytes!("../../nodes.json");
+        let urls = parse_system_catalog(bytes).unwrap();
+        assert_eq!(urls.len(), 18);
+        assert_eq!(urls[0], FASTGIT_REWRITE_BASE);
+        assert!(!String::from_utf8_lossy(bytes).contains("fastgit.cc"));
+
+        let duplicate = encrypted_catalog(&[
+            "https://fastgit.cc",
+            "https://fastgit.cc/https://github.com/",
+        ]);
         assert_eq!(
-            parse_system_catalog(include_bytes!("../../nodes.json")).unwrap(),
+            parse_system_catalog(&duplicate).unwrap(),
             vec![FASTGIT_REWRITE_BASE]
         );
+        assert!(parse_system_catalog(&encrypted_catalog(&[])).is_err());
+        assert!(parse_system_catalog(&encrypted_catalog(&["http://proxy.example"])).is_err());
+
+        let mut catalog: serde_json::Value = serde_json::from_slice(bytes).unwrap();
+        catalog["ciphertext"] = serde_json::Value::String("AAAA".into());
+        assert!(parse_system_catalog(&serde_json::to_vec(&catalog).unwrap()).is_err());
+        assert!(parse_system_catalog(br#"["https://fastgit.cc"]"#).is_err());
     }
 
     #[test]
@@ -1260,12 +1316,12 @@ mod tests {
             if url.contains("cdn.jsdelivr.net") {
                 Err("primary unavailable".into())
             } else {
-                Ok(br#"["https://fastgit.cc"]"#.to_vec())
+                Ok(include_bytes!("../../nodes.json").to_vec())
             }
         })
         .unwrap();
 
-        assert_eq!(output, br#"["https://fastgit.cc"]"#);
+        assert_eq!(output, include_bytes!("../../nodes.json"));
         assert_eq!(requested, SYSTEM_NODE_CATALOG_URLS);
     }
 
@@ -1292,9 +1348,8 @@ mod tests {
         atomic_write(&core.paths.gitconfig, accelerated.as_bytes()).unwrap();
         assert!(accelerated.contains(FASTGIT_REWRITE_BASE));
 
-        let update = core
-            .apply_system_catalog(br#"["https://proxy.example"]"#)
-            .unwrap();
+        let catalog = encrypted_catalog(&["https://proxy.example"]);
+        let update = core.apply_system_catalog(&catalog).unwrap();
         assert!(update.changed);
         assert!(update.recovery_applied_at.is_some());
 
@@ -1385,9 +1440,8 @@ mod tests {
         )
         .unwrap();
         atomic_write(&core.paths.gitconfig, accelerated.as_bytes()).unwrap();
-        let update = core
-            .apply_system_catalog(br#"["https://proxy.example"]"#)
-            .unwrap();
+        let catalog = encrypted_catalog(&["https://proxy.example"]);
+        let update = core.apply_system_catalog(&catalog).unwrap();
         let recovery_applied_at = update.recovery_applied_at.unwrap();
 
         let mut user_settings = core.settings().unwrap();

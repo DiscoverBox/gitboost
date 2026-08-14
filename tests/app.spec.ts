@@ -14,6 +14,7 @@ test("core desktop workflow is navigable", async ({ page }) => {
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await expect(page.getByRole("heading", { name: "自定义节点", exact: true })).toBeVisible();
   await expect(page.getByText("系统线路 1 个 · 使用公开仓库进行隔离检测，不修改全局 Git 配置", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "刷新系统线路" })).toBeVisible();
   await expect(page.getByText("https://fastgit.cc/https://github.com/", { exact: true })).toBeHidden();
 
   await page.getByRole("button", { name: "添加节点" }).click();
@@ -36,6 +37,31 @@ test("core desktop workflow is navigable", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "使用日志", exact: true })).toBeVisible();
   await expect(page.getByText("只保存脱敏结果")).toBeVisible();
   expect(errors).toEqual([]);
+});
+
+test("system node refresh reports whether the catalog changed", async ({ page }) => {
+  await page.addInitScript(() => {
+    const snapshot = {
+      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
+      nodes: [{ id: "system", name: "system", rewriteBase: "https://proxy.example/https://github.com/", enabled: true, builtIn: true, health: { status: "untested", successCount: 0, attemptCount: 0, medianLatencyMs: null, consecutiveFailures: 0, checkedAt: null, failureReason: null } }],
+      routes: [],
+      environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
+    };
+    let refreshCount = 0;
+    Object.assign(window, { __TAURI_INTERNALS__: { invoke: async (command: string) => {
+      if (command === "refresh_system_nodes") return refreshCount++ === 0;
+      return snapshot;
+    } } });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const refresh = page.getByRole("button", { name: "刷新系统线路" });
+
+  await refresh.click();
+  await expect(page.locator(".toast")).toHaveText("系统线路已更新");
+  await refresh.click();
+  await expect(page.locator(".toast")).toHaveText("系统线路已是最新");
 });
 
 test("uses the bright interface palette", async ({ page }) => {

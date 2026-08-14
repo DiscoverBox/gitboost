@@ -72,6 +72,7 @@ export const api = {
   exportNodes: (path: string) => call<string>("export_nodes", { path }),
   testNode: (nodeId: string) => call<NodeEntry>("test_node", { nodeId }),
   testAllNodes: () => call<NodeEntry[]>("test_all_nodes"),
+  refreshSystemNodes: () => call<boolean>("refresh_system_nodes"),
   renameNode: (nodeId: string, name: string) => call<AppSnapshot>("rename_node", { nodeId, name }),
   setNodeEnabled: (nodeId: string, enabled: boolean) => call<AppSnapshot>("set_node_enabled", { nodeId, enabled }),
   deleteNode: (nodeId: string) => call<AppSnapshot>("delete_node", { nodeId }),
