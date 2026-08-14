@@ -6,7 +6,7 @@ on:
     branches:
       - main
     paths:
-      - nodes.json
+      - nodes.enc.json
 
 permissions:
   contents: read

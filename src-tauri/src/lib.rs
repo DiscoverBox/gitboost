@@ -9,17 +9,65 @@ mod usage;
 use crate::{core::AppCore, models::*};
 use std::{
     path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
     tray::TrayIconBuilder,
-    Emitter, Manager, State,
+    Emitter, Manager, Runtime, State,
 };
 #[cfg(target_os = "macos")]
 use tauri_plugin_autostart::MacosLauncher;
 
 type CommandResult<T> = Result<T, String>;
+
+struct TrayMenu<R: Runtime> {
+    status: MenuItem<R>,
+    toggle: MenuItem<R>,
+    refresh_version: AtomicU64,
+}
+
+fn tray_labels(settings: &Settings, nodes: &[NodeEntry]) -> (String, &'static str) {
+    let current = if settings.acceleration_enabled {
+        settings
+            .current_node_id
+            .as_ref()
+            .and_then(|id| nodes.iter().find(|node| &node.node.id == id))
+            .map(|node| node.node.name.as_str())
+            .unwrap_or("GitHub 加速")
+    } else {
+        "GitHub 直连"
+    };
+    let toggle = if settings.acceleration_enabled {
+        "关闭加速"
+    } else {
+        "开启加速"
+    };
+    (format!("当前线路：{current}"), toggle)
+}
+
+fn refresh_tray<R: Runtime>(app: &tauri::AppHandle<R>, snapshot: &AppSnapshot) {
+    let Some(menu) = app.try_state::<TrayMenu<R>>() else {
+        return;
+    };
+    let version = menu.refresh_version.fetch_add(1, Ordering::SeqCst) + 1;
+    if menu.refresh_version.load(Ordering::SeqCst) != version {
+        return;
+    }
+    let (status, toggle) = tray_labels(&snapshot.settings, &snapshot.nodes);
+    let _ = menu.status.set_text(status);
+    if menu.refresh_version.load(Ordering::SeqCst) != version {
+        return;
+    }
+    let _ = menu.toggle.set_text(toggle);
+}
+
+fn refresh_tray_from_core<R: Runtime>(app: &tauri::AppHandle<R>) {
+    if let Ok(snapshot) = app.state::<AppCore>().snapshot() {
+        refresh_tray(app, &snapshot);
+    }
+}
 
 async fn run_node_test<T, F>(operation: F) -> CommandResult<T>
 where
@@ -57,73 +105,111 @@ fn export_nodes(core: State<'_, AppCore>, path: String) -> CommandResult<String>
 
 #[tauri::command]
 async fn test_node(app: tauri::AppHandle, node_id: String) -> CommandResult<NodeEntry> {
-    run_node_test(move || app.state::<AppCore>().test_node(&node_id)).await
+    let worker_app = app.clone();
+    let result = run_node_test(move || worker_app.state::<AppCore>().test_node(&node_id)).await?;
+    refresh_tray_from_core(&app);
+    Ok(result)
 }
 
 #[tauri::command]
 async fn test_all_nodes(app: tauri::AppHandle) -> CommandResult<Vec<NodeEntry>> {
     let progress_app = app.clone();
-    run_node_test(move || {
-        app.state::<AppCore>()
+    let worker_app = app.clone();
+    let result = run_node_test(move || {
+        worker_app
+            .state::<AppCore>()
             .test_all_nodes_or_join_with_progress(|completed, total| {
                 emit_node_test_progress(&progress_app, completed, total);
             })
     })
-    .await
+    .await?;
+    refresh_tray_from_core(&app);
+    Ok(result)
 }
 
 #[tauri::command]
 async fn refresh_system_nodes(app: tauri::AppHandle) -> CommandResult<bool> {
     let progress_app = app.clone();
-    run_node_test(move || {
-        app.state::<AppCore>()
+    let worker_app = app.clone();
+    let result = run_node_test(move || {
+        worker_app
+            .state::<AppCore>()
             .refresh_system_nodes_with_progress(|completed, total| {
                 emit_node_test_progress(&progress_app, completed, total);
             })
     })
-    .await
+    .await?;
+    refresh_tray_from_core(&app);
+    Ok(result)
 }
 
 #[tauri::command]
 fn rename_node(
+    app: tauri::AppHandle,
     core: State<'_, AppCore>,
     node_id: String,
     name: String,
 ) -> CommandResult<AppSnapshot> {
-    core.rename_node(&node_id, &name)
+    let snapshot = core.rename_node(&node_id, &name)?;
+    refresh_tray(&app, &snapshot);
+    Ok(snapshot)
 }
 
 #[tauri::command]
 fn set_node_enabled(
+    app: tauri::AppHandle,
     core: State<'_, AppCore>,
     node_id: String,
     enabled: bool,
 ) -> CommandResult<AppSnapshot> {
-    core.set_node_enabled(&node_id, enabled)
+    let snapshot = core.set_node_enabled(&node_id, enabled)?;
+    refresh_tray(&app, &snapshot);
+    Ok(snapshot)
 }
 
 #[tauri::command]
-fn delete_node(core: State<'_, AppCore>, node_id: String) -> CommandResult<AppSnapshot> {
-    core.delete_node(&node_id)
+fn delete_node(
+    app: tauri::AppHandle,
+    core: State<'_, AppCore>,
+    node_id: String,
+) -> CommandResult<AppSnapshot> {
+    let snapshot = core.delete_node(&node_id)?;
+    refresh_tray(&app, &snapshot);
+    Ok(snapshot)
 }
 
 #[tauri::command]
-fn set_acceleration(core: State<'_, AppCore>, enabled: bool) -> CommandResult<AppSnapshot> {
-    core.set_acceleration(enabled)
+fn set_acceleration(
+    app: tauri::AppHandle,
+    core: State<'_, AppCore>,
+    enabled: bool,
+) -> CommandResult<AppSnapshot> {
+    let snapshot = core.set_acceleration(enabled)?;
+    refresh_tray(&app, &snapshot);
+    Ok(snapshot)
 }
 
 #[tauri::command]
 fn set_line_mode(
+    app: tauri::AppHandle,
     core: State<'_, AppCore>,
     mode: LineMode,
     node_id: Option<String>,
 ) -> CommandResult<AppSnapshot> {
-    core.set_line_mode(mode, node_id.as_deref())
+    let snapshot = core.set_line_mode(mode, node_id.as_deref())?;
+    refresh_tray(&app, &snapshot);
+    Ok(snapshot)
 }
 
 #[tauri::command]
-fn set_route_scope(core: State<'_, AppCore>, scope: RouteScope) -> CommandResult<AppSnapshot> {
-    core.set_route_scope(scope)
+fn set_route_scope(
+    app: tauri::AppHandle,
+    core: State<'_, AppCore>,
+    scope: RouteScope,
+) -> CommandResult<AppSnapshot> {
+    let snapshot = core.set_route_scope(scope)?;
+    refresh_tray(&app, &snapshot);
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -159,8 +245,13 @@ fn update_launch_at_login(core: State<'_, AppCore>, enabled: bool) -> CommandRes
 }
 
 #[tauri::command]
-fn restore_git_config(core: State<'_, AppCore>) -> CommandResult<AppSnapshot> {
-    core.restore_git_config()
+fn restore_git_config(
+    app: tauri::AppHandle,
+    core: State<'_, AppCore>,
+) -> CommandResult<AppSnapshot> {
+    let snapshot = core.restore_git_config()?;
+    refresh_tray(&app, &snapshot);
+    Ok(snapshot)
 }
 
 #[tauri::command]
@@ -209,45 +300,22 @@ fn reveal_main(app: &tauri::AppHandle) {
 
 fn install_tray(app: &tauri::App) -> tauri::Result<()> {
     let snapshot = app.state::<AppCore>().snapshot().ok();
-    let enabled = snapshot
+    let (status_text, toggle_text) = snapshot
         .as_ref()
-        .is_some_and(|state| state.settings.acceleration_enabled);
-    let current = snapshot
-        .as_ref()
-        .and_then(|state| {
-            state
-                .settings
-                .current_node_id
-                .as_ref()
-                .and_then(|id| state.nodes.iter().find(|node| &node.node.id == id))
-        })
-        .map(|node| node.node.name.as_str())
-        .unwrap_or("GitHub 直连");
-    let status = MenuItem::with_id(
-        app,
-        "status",
-        format!("当前线路：{current}"),
-        false,
-        None::<&str>,
-    )?;
-    let toggle = MenuItem::with_id(
-        app,
-        "toggle",
-        if enabled {
-            "关闭加速"
-        } else {
-            "开启加速"
-        },
-        true,
-        None::<&str>,
-    )?;
+        .map(|state| tray_labels(&state.settings, &state.nodes))
+        .unwrap_or_else(|| ("当前线路：GitHub 直连".into(), "开启加速"));
+    let status = MenuItem::with_id(app, "status", status_text, false, None::<&str>)?;
+    let toggle = MenuItem::with_id(app, "toggle", toggle_text, true, None::<&str>)?;
     let retest = MenuItem::with_id(app, "retest", "重新测速并切换", true, None::<&str>)?;
     let open = MenuItem::with_id(app, "open", "打开 GitBoost", true, None::<&str>)?;
     let separator = PredefinedMenuItem::separator(app)?;
     let quit = MenuItem::with_id(app, "quit", "退出", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&status, &toggle, &retest, &open, &separator, &quit])?;
-    let toggle_item = toggle.clone();
-    let status_item = status.clone();
+    app.manage(TrayMenu {
+        status: status.clone(),
+        toggle: toggle.clone(),
+        refresh_version: AtomicU64::new(0),
+    });
     let mut tray = TrayIconBuilder::new()
         .menu(&menu)
         .show_menu_on_left_click(false)
@@ -262,17 +330,7 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
                     .unwrap_or(false);
                 match core.set_acceleration(!current_enabled) {
                     Ok(state) => {
-                        let _ = toggle_item.set_text(if state.settings.acceleration_enabled {
-                            "关闭加速"
-                        } else {
-                            "开启加速"
-                        });
-                        let status = if state.settings.acceleration_enabled {
-                            "GitHub 加速"
-                        } else {
-                            "GitHub 直连"
-                        };
-                        let _ = status_item.set_text(format!("当前线路：{status}"));
+                        refresh_tray(app, &state);
                         let _ = app.emit("snapshot-updated", state);
                     }
                     Err(error) => {
@@ -292,6 +350,7 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
                     match result {
                         Ok(_) => {
                             if let Ok(state) = handle.state::<AppCore>().snapshot() {
+                                refresh_tray(&handle, &state);
                                 let _ = handle.emit("snapshot-updated", state);
                             }
                         }
@@ -334,6 +393,7 @@ fn start_health_monitor(app: tauri::AppHandle) {
                     .is_ok()
                 {
                     if let Ok(state) = handle.state::<AppCore>().snapshot() {
+                        refresh_tray(&handle, &state);
                         let _ = handle.emit("snapshot-updated", state);
                     }
                 }
@@ -355,6 +415,7 @@ fn start_system_node_monitor(app: tauri::AppHandle) {
                     core.system_node_refresh_failed(&error);
                 }
                 if let Ok(state) = core.snapshot() {
+                    refresh_tray(&handle, &state);
                     let _ = handle.emit("snapshot-updated", state);
                 }
             })
@@ -427,7 +488,8 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::run_node_test;
+    use super::{run_node_test, tray_labels};
+    use crate::models::{HealthSummary, NodeDefinition, NodeEntry, Settings};
 
     #[test]
     fn node_tests_run_off_the_calling_thread() {
@@ -438,5 +500,33 @@ mod tests {
         .unwrap();
 
         assert!(ran_in_background);
+    }
+
+    #[test]
+    fn tray_labels_follow_acceleration_and_current_node() {
+        let node = NodeEntry {
+            node: NodeDefinition::fastgit(),
+            health: HealthSummary::default(),
+        };
+        let enabled = Settings {
+            acceleration_enabled: true,
+            current_node_id: Some(node.node.id.clone()),
+            ..Settings::default()
+        };
+
+        assert_eq!(
+            tray_labels(&enabled, std::slice::from_ref(&node)),
+            ("当前线路：FastGit".into(), "关闭加速")
+        );
+
+        let disabled = Settings {
+            acceleration_enabled: false,
+            current_node_id: Some(node.node.id.clone()),
+            ..Settings::default()
+        };
+        assert_eq!(
+            tray_labels(&disabled, &[node]),
+            ("当前线路：GitHub 直连".into(), "开启加速")
+        );
     }
 }
