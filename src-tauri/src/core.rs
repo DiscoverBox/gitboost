@@ -25,12 +25,11 @@ use std::{
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-const SYSTEM_NODE_CATALOG_URLS: [&str; 5] = [
+const SYSTEM_NODE_CATALOG_URLS: [&str; 4] = [
     "https://cdn.jsdelivr.net/gh/DiscoverBox/gitboost@main/nodes.enc.json",
     "https://cdn.jsdmirror.cn/gh/DiscoverBox/gitboost@main/nodes.enc.json",
-    "https://jsdelivr.topthink.com/gh/DiscoverBox/gitboost@main/nodes.enc.json",
-    "https://www.webcache.cn/gh/DiscoverBox/gitboost@main/nodes.enc.json",
-    "https://www.upcache.cn/gh/DiscoverBox/gitboost@main/nodes.enc.json",
+    "https://cdn.bili33.top/gh/DiscoverBox/gitboost@main/nodes.enc.json",
+    "https://cdn.jsdmirror.com/gh/DiscoverBox/gitboost@main/nodes.enc.json",
 ];
 const SYSTEM_NODE_CATALOG_KEY: [u8; 32] = [
     0x2d, 0xbf, 0x43, 0xf2, 0x77, 0xa1, 0x09, 0x79, 0xcb, 0x9e, 0x06, 0xe7, 0x2b, 0x0d, 0xdb, 0x71,
@@ -1332,7 +1331,7 @@ mod tests {
         let mut requested = Vec::new();
         let output = fetch_system_catalog_from(&SYSTEM_NODE_CATALOG_URLS, |url| {
             requested.push(url.to_string());
-            if url.contains("upcache.cn") {
+            if url.contains("cdn.jsdmirror.com") {
                 Ok(include_bytes!("../../nodes.enc.json").to_vec())
             } else {
                 Err("catalog unavailable".into())

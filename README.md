@@ -65,7 +65,7 @@ npm run build:windows
 
 Windows 需要先安装 Git for Windows。安装包默认按当前用户安装；WebView2 缺失时由安装器静默引导安装。产物位于 `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/`。
 
-系统节点目录源文件为仓库根目录的 `nodes.enc.json`，主发布地址为 `https://cdn.jsdelivr.net/gh/DiscoverBox/gitboost@main/nodes.enc.json`，不可用时依次回退到 JSDMirror、TopThink、WebCache 和 UpCache。文件使用 AES-256-GCM 加密，不直接包含代理域名；客户端解密并校验后才会更新本地缓存。由于解密密钥随开源客户端分发，这项措施用于避免静态目录直接暴露节点，并不用于抵抗客户端逆向。
+系统节点目录源文件为仓库根目录的 `nodes.enc.json`，主发布地址为 `https://cdn.jsdelivr.net/gh/DiscoverBox/gitboost@main/nodes.enc.json`，不可用时依次回退到 JSDMirror、Bili33 CDN 和 JSDMirror.com。文件使用 AES-256-GCM 加密，不直接包含代理域名；客户端解密并校验后才会更新本地缓存。由于解密密钥随开源客户端分发，这项措施用于避免静态目录直接暴露节点，并不用于抵抗客户端逆向。
 
 更新系统节点时，先准备一个不提交到仓库的明文 URL 数组，再生成发布文件：
 
