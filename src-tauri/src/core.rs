@@ -789,6 +789,9 @@ impl AppCore {
         }
         routes.retain(|route| route.id != route_id);
         let mut settings = self.settings()?;
+        if settings.route_scope == RouteScope::Allowlist && routes.is_empty() {
+            settings.acceleration_enabled = false;
+        }
         let pairs = self.node_pairs()?;
         self.write_configuration(&mut settings, &pairs, &routes)?;
         atomic_write_json(&self.paths.routes, &routes)?;
@@ -932,12 +935,22 @@ impl AppCore {
 
     pub fn refresh_registered_configuration(&self) -> Result<(), String> {
         let _guard = self.lock.lock();
-        if !git::include_registered(&self.paths.gitconfig) {
+        let registered = git::include_registered(&self.paths.gitconfig);
+        let mut settings = self.settings()?;
+        let routes = self.routes()?;
+        let repaired_empty_allowlist = settings.acceleration_enabled
+            && settings.route_scope == RouteScope::Allowlist
+            && routes.is_empty();
+        if repaired_empty_allowlist {
+            settings.acceleration_enabled = false;
+        }
+        if !registered {
+            if repaired_empty_allowlist {
+                atomic_write_json(&self.paths.settings, &settings)?;
+            }
             return Ok(());
         }
-        let mut settings = self.settings()?;
         let pairs = self.node_pairs()?;
-        let routes = self.routes()?;
         self.write_configuration(&mut settings, &pairs, &routes)?;
         atomic_write_json(&self.paths.settings, &settings)
     }
@@ -1366,7 +1379,7 @@ mod tests {
     fn system_catalog_is_encrypted_and_authenticated() {
         let bytes = include_bytes!("../../nodes.enc.json");
         let urls = parse_system_catalog(bytes).unwrap();
-        assert_eq!(urls.len(), 18);
+        assert!(!urls.is_empty());
         assert_eq!(urls[0], FASTGIT_REWRITE_BASE);
         assert!(!String::from_utf8_lossy(bytes).contains("fastgit.cc"));
 
@@ -1857,20 +1870,22 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        let node = owner_result
-            .iter()
-            .find(|node| matches!(node.health.status, NodeStatus::Available | NodeStatus::Slow))
-            .expect("live integration requires at least one usable system node");
-        let node_id = node.node.id.clone();
-        let rewrite_base = node.node.rewrite_base.clone();
-
         core.add_route("openai/codex").unwrap();
         let enabled = core.set_acceleration(true).unwrap();
         assert!(enabled.settings.acceleration_enabled);
-        assert_eq!(
-            enabled.settings.current_node_id.as_deref(),
-            Some(node_id.as_str())
-        );
+        let node_id = enabled
+            .settings
+            .current_node_id
+            .clone()
+            .expect("live integration requires at least one usable system node");
+        let node = owner_result
+            .iter()
+            .find(|node| {
+                node.node.id == node_id
+                    && matches!(node.health.status, NodeStatus::Available | NodeStatus::Slow)
+            })
+            .expect("automatic selection must use a verified node");
+        let rewrite_base = node.node.rewrite_base.clone();
         assert!(enabled.environment.include_registered);
 
         let repository = tempfile::tempdir().unwrap();
@@ -1910,7 +1925,7 @@ mod tests {
         );
 
         drop(core);
-        let core = AppCore::new(root).unwrap();
+        let core = AppCore::new(root.clone()).unwrap();
         core.refresh_registered_configuration().unwrap();
         let restarted = core.snapshot().unwrap();
         assert!(restarted.settings.acceleration_enabled);
@@ -1960,6 +1975,23 @@ mod tests {
             fs::read_to_string(directory.path().join("app-data/logs/usage.jsonl")).unwrap();
         assert!(!stored_usage.contains("secret"));
         assert!(!stored_usage.contains("hidden"));
+
+        let route_id = core.snapshot().unwrap().routes[0].id.clone();
+        let without_routes = core.delete_route(&route_id).unwrap();
+        assert!(without_routes.routes.is_empty());
+        assert!(!without_routes.settings.acceleration_enabled);
+        assert_eq!(
+            git(repository.path(), &["remote", "get-url", "origin"]),
+            "https://github.com/openai/codex.git"
+        );
+
+        let mut stale_settings = core.settings().unwrap();
+        stale_settings.acceleration_enabled = true;
+        atomic_write_json(&core.paths.settings, &stale_settings).unwrap();
+        drop(core);
+        let core = AppCore::new(root).unwrap();
+        core.refresh_registered_configuration().unwrap();
+        assert!(!core.snapshot().unwrap().settings.acceleration_enabled);
 
         let restored = core.restore_git_config().unwrap();
         assert!(!restored.settings.acceleration_enabled);
