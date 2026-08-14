@@ -1,6 +1,7 @@
 mod core;
 mod downloads;
 mod git;
+mod http;
 mod importer;
 mod models;
 mod storage;

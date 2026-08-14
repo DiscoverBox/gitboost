@@ -8,9 +8,10 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:scripts": "node --test scripts/*.test.mjs",
     "test:ui": "playwright test",
-    "test:integration": "cargo test --manifest-path src-tauri/Cargo.toml core_workflow_applies_verifies_persists_and_restores_git_routing -- --ignored --nocapture",
-    "test:all": "npm test && cargo test --manifest-path src-tauri/Cargo.toml && npm run test:ui",
+    "test:integration": "cargo test --manifest-path src-tauri/Cargo.toml -- --ignored --nocapture --test-threads=1",
+    "test:all": "npm test && npm run test:scripts && cargo test --manifest-path src-tauri/Cargo.toml && npm run test:ui",
     "build:windows": "tauri build --target x86_64-pc-windows-msvc",
     "tauri": "tauri"
   },

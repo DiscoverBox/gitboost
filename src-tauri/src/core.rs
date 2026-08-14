@@ -1,12 +1,12 @@
 use crate::{
-    downloads, git,
+    downloads, git, http,
     importer::{
         default_node_name, normalize_repository_url, normalize_rewrite_base, parse_import_text,
     },
     models::*,
     storage::{
         append_log, append_usage_event, atomic_write, atomic_write_json, backup_file, clear_logs,
-        ensure_dir, load_json, load_usage_events,
+        ensure_dir, load_json, load_or_rebuild_json, load_usage_events,
     },
     usage::CompletedTrace,
 };
@@ -19,8 +19,8 @@ use std::{
     collections::{HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    process::Command,
     sync::atomic::{AtomicBool, AtomicUsize, Ordering},
+    time::Duration,
 };
 use tempfile::NamedTempFile;
 use uuid::Uuid;
@@ -36,8 +36,7 @@ const SYSTEM_NODE_CATALOG_KEY: [u8; 32] = [
     0x0c, 0xb6, 0x0d, 0x23, 0xb1, 0xb7, 0xc4, 0x65, 0x4a, 0xa1, 0xf6, 0x73, 0x46, 0x7b, 0xd9, 0x69,
 ];
 const MAX_SYSTEM_NODES: usize = 100;
-const CATALOG_MAX_BYTES: &str = "262144";
-const CATALOG_TIMEOUT_SECONDS: &str = "10";
+const CATALOG_MAX_BYTES: usize = 262_144;
 const NODE_TEST_CONCURRENCY: usize = 4;
 const BACKGROUND_HEALTHY_NODE_TARGET: usize = 10;
 const BACKGROUND_HEALTHY_NODE_MINIMUM: usize = 5;
@@ -118,38 +117,46 @@ impl AppCore {
     }
 
     fn initialize(&self) -> Result<(), String> {
-        if !self.paths.settings.exists() {
-            atomic_write_json(&self.paths.settings, &Settings::default())?;
-        } else {
-            let mut settings: Settings = load_json(&self.paths.settings)?;
-            if !HEALTH_CHECK_INTERVALS.contains(&settings.health_check_minutes) {
-                settings.health_check_minutes = DEFAULT_HEALTH_CHECK_MINUTES;
-                atomic_write_json(&self.paths.settings, &settings)?;
-            }
+        let (mut settings, settings_rebuilt) = load_or_rebuild_json::<Settings>(
+            &self.paths.settings,
+            &self.paths.backups,
+            "corrupt-settings.json",
+        )?;
+        if settings_rebuilt {
+            let _ = append_log(
+                &self.paths.logs,
+                "ERROR",
+                "corrupt settings.json quarantined and rebuilt with safe defaults",
+            );
+        }
+        if !HEALTH_CHECK_INTERVALS.contains(&settings.health_check_minutes) {
+            settings.health_check_minutes = DEFAULT_HEALTH_CHECK_MINUTES;
+            atomic_write_json(&self.paths.settings, &settings)?;
         }
         self.initialize_node_files()?;
-        if self.paths.health.exists() {
-            let bytes = fs::read(&self.paths.health)
-                .map_err(|error| format!("无法读取 {}：{error}", self.paths.health.display()))?;
-            let value: serde_json::Value = serde_json::from_slice(&bytes)
-                .map_err(|error| format!("{} 数据损坏：{error}", self.paths.health.display()))?;
-            let legacy = value.as_object().is_some_and(|entries| {
-                entries.values().any(|entry| {
-                    entry
-                        .as_object()
-                        .is_some_and(|summary| !summary.contains_key("inAutoPool"))
-                })
-            });
-            if legacy {
-                fs::remove_file(&self.paths.health)
-                    .map_err(|error| format!("无法删除旧健康数据：{error}"))?;
-            }
+        let (_, health_rebuilt) = load_or_rebuild_json::<HashMap<String, HealthSummary>>(
+            &self.paths.health,
+            &self.paths.backups,
+            "corrupt-health.json",
+        )?;
+        if health_rebuilt {
+            let _ = append_log(
+                &self.paths.logs,
+                "ERROR",
+                "corrupt or legacy health.json quarantined and rebuilt",
+            );
         }
-        if !self.paths.health.exists() {
-            atomic_write_json(&self.paths.health, &HashMap::<String, HealthSummary>::new())?;
-        }
-        if !self.paths.routes.exists() {
-            atomic_write_json(&self.paths.routes, &Vec::<RouteEntry>::new())?;
+        let (_, routes_rebuilt) = load_or_rebuild_json::<Vec<RouteEntry>>(
+            &self.paths.routes,
+            &self.paths.backups,
+            "corrupt-routes.json",
+        )?;
+        if routes_rebuilt {
+            let _ = append_log(
+                &self.paths.logs,
+                "ERROR",
+                "corrupt routes.json quarantined and rebuilt with an empty allowlist",
+            );
         }
         if !self.paths.gitconfig.exists() {
             atomic_write(
@@ -273,23 +280,29 @@ impl AppCore {
             settings_changed = true;
         }
         let should_resume = current_removed && settings.acceleration_enabled;
+        let previous_gitconfig = should_resume
+            .then(|| fs::read(&self.paths.gitconfig).ok())
+            .flatten();
+        let registered_before = should_resume && git::include_registered(&self.paths.gitconfig);
         if should_resume {
             settings.acceleration_enabled = false;
             settings.line_mode = LineMode::Direct;
             self.write_configuration(&mut settings, &[], &[])?;
         }
-        atomic_write_json(&self.paths.system_nodes, &urls)?;
-        if settings_changed {
-            if let Err(error) = atomic_write_json(&self.paths.settings, &settings) {
-                let _ = atomic_write_json(&self.paths.settings, &original_settings);
-                let _ = atomic_write_json(&self.paths.system_nodes, &current);
-                return Err(error);
+        let persist_result = (|| {
+            atomic_write_json(&self.paths.system_nodes, &urls)?;
+            if settings_changed && !should_resume {
+                atomic_write_json(&self.paths.settings, &settings)?;
             }
-        }
-        if let Err(error) = atomic_write_json(&self.paths.health, &health) {
+            atomic_write_json(&self.paths.health, &health)
+        })();
+        if let Err(error) = persist_result {
             let _ = atomic_write_json(&self.paths.health, &original_health);
             let _ = atomic_write_json(&self.paths.settings, &original_settings);
             let _ = atomic_write_json(&self.paths.system_nodes, &current);
+            if should_resume {
+                self.restore_git_state(previous_gitconfig.as_deref(), registered_before);
+            }
             return Err(error);
         }
         let _ = append_log(
@@ -692,8 +705,7 @@ impl AppCore {
         settings.fixed_node_id = None;
         settings.current_node_id = Some(node.id.clone());
         settings.acceleration_enabled = true;
-        self.write_configuration(&mut settings, &pairs, &self.routes()?)?;
-        atomic_write_json(&self.paths.settings, &settings)
+        self.write_configuration(&mut settings, &pairs, &self.routes()?)
     }
 
     fn reselect_after_health_change(&self) -> Result<(), String> {
@@ -707,8 +719,9 @@ impl AppCore {
                 self.write_configuration(&mut settings, &pairs, &self.routes()?)?;
             } else if settings.acceleration_enabled {
                 self.write_configuration(&mut settings, &pairs, &self.routes()?)?;
+            } else {
+                atomic_write_json(&self.paths.settings, &settings)?;
             }
-            atomic_write_json(&self.paths.settings, &settings)?;
         }
         Ok(())
     }
@@ -814,7 +827,6 @@ impl AppCore {
             self.select_current(&mut settings, &pairs)?;
         }
         self.write_configuration(&mut settings, &pairs, &self.routes()?)?;
-        atomic_write_json(&self.paths.settings, &settings)?;
         self.snapshot()
     }
 
@@ -851,7 +863,6 @@ impl AppCore {
             }
         }
         self.write_configuration(&mut settings, &pairs, &self.routes()?)?;
-        atomic_write_json(&self.paths.settings, &settings)?;
         self.snapshot()
     }
 
@@ -891,7 +902,6 @@ impl AppCore {
         }
         let pairs = self.node_pairs()?;
         self.write_configuration(&mut settings, &pairs, &routes)?;
-        atomic_write_json(&self.paths.settings, &settings)?;
         self.snapshot()
     }
 
@@ -909,6 +919,7 @@ impl AppCore {
         {
             return Err("该仓库已在清单中".into());
         }
+        let previous_routes = routes.clone();
         routes.push(RouteEntry {
             id: Uuid::new_v4().to_string(),
             repository_url: normalized,
@@ -916,9 +927,11 @@ impl AppCore {
         });
         let mut settings = settings;
         let pairs = self.node_pairs()?;
-        self.write_configuration(&mut settings, &pairs, &routes)?;
         atomic_write_json(&self.paths.routes, &routes)?;
-        atomic_write_json(&self.paths.settings, &settings)?;
+        if let Err(error) = self.write_configuration(&mut settings, &pairs, &routes) {
+            let _ = atomic_write_json(&self.paths.routes, &previous_routes);
+            return Err(error);
+        }
         self.snapshot()
     }
 
@@ -928,15 +941,18 @@ impl AppCore {
         if !routes.iter().any(|route| route.id == route_id) {
             return Err("路由不存在".into());
         }
+        let previous_routes = routes.clone();
         routes.retain(|route| route.id != route_id);
         let mut settings = self.settings()?;
         if settings.route_scope == RouteScope::Allowlist && routes.is_empty() {
             settings.acceleration_enabled = false;
         }
         let pairs = self.node_pairs()?;
-        self.write_configuration(&mut settings, &pairs, &routes)?;
         atomic_write_json(&self.paths.routes, &routes)?;
-        atomic_write_json(&self.paths.settings, &settings)?;
+        if let Err(error) = self.write_configuration(&mut settings, &pairs, &routes) {
+            let _ = atomic_write_json(&self.paths.routes, &previous_routes);
+            return Err(error);
+        }
         self.snapshot()
     }
 
@@ -961,33 +977,6 @@ impl AppCore {
             git::build_config(settings, selected, routes, Some(&self.paths.trace_socket))?;
         let previous = fs::read(&self.paths.gitconfig).ok();
         let registered_before = git::include_registered(&self.paths.gitconfig);
-        let (validation_url, expect_accelerated) = match settings.route_scope {
-            RouteScope::Global => (TEST_REPOSITORY.to_string(), true),
-            RouteScope::Allowlist => match routes.first() {
-                Some(route) => (
-                    route
-                        .repository_url
-                        .strip_suffix(".git")
-                        .ok_or_else(|| "清单路由不是规范化的 GitHub HTTPS 仓库地址".to_string())?
-                        .to_string(),
-                    true,
-                ),
-                None => (TEST_REPOSITORY.to_string(), false),
-            },
-        };
-        let validate = |config_path: &Path| -> Result<(), String> {
-            let (fetch, push) = git::effective_urls(config_path, &validation_url)?;
-            if expect_accelerated {
-                let node = selected.ok_or_else(|| "没有通过检测的可用节点".to_string())?;
-                if !fetch.starts_with(&node.rewrite_base) {
-                    return Err("配置未能把 fetch 重写到所选节点".into());
-                }
-            }
-            if !push.starts_with("https://github.com/") {
-                return Err("配置的标准 push 未保持 GitHub 直连".into());
-            }
-            Ok(())
-        };
         if settings.acceleration_enabled && settings.line_mode != LineMode::Direct {
             let mut candidate = NamedTempFile::new_in(&self.paths.root)
                 .map_err(|error| format!("无法创建配置候选文件：{error}"))?;
@@ -997,7 +986,7 @@ impl AppCore {
                 .as_file()
                 .sync_all()
                 .map_err(|error| format!("无法同步配置候选：{error}"))?;
-            validate(candidate.path())?;
+            validate_configuration(candidate.path(), settings, selected, routes)?;
         }
         let _ = backup_file(
             &self.paths.gitconfig,
@@ -1007,24 +996,23 @@ impl AppCore {
         atomic_write(&self.paths.gitconfig, content.as_bytes())?;
         if settings.acceleration_enabled || registered_before {
             if let Err(error) = git::register_include(&self.paths.gitconfig) {
-                if let Some(bytes) = previous {
-                    let _ = atomic_write(&self.paths.gitconfig, &bytes);
-                }
+                self.restore_git_state(previous.as_deref(), registered_before);
                 return Err(error);
             }
         }
         if settings.acceleration_enabled && settings.line_mode != LineMode::Direct {
-            if let Err(error) = validate(&self.paths.gitconfig) {
-                if let Some(bytes) = previous {
-                    let _ = atomic_write(&self.paths.gitconfig, &bytes);
-                }
-                if !registered_before {
-                    let _ = git::unregister_include(&self.paths.gitconfig);
-                }
+            if let Err(error) =
+                validate_configuration(&self.paths.gitconfig, settings, selected, routes)
+            {
+                self.restore_git_state(previous.as_deref(), registered_before);
                 return Err(format!("写入后的 Git 配置验证失败：{error}"));
             }
         }
         settings.last_applied_at = Some(Utc::now());
+        if let Err(error) = atomic_write_json(&self.paths.settings, settings) {
+            self.restore_git_state(previous.as_deref(), registered_before);
+            return Err(format!("保存设置失败，Git 配置已回滚：{error}"));
+        }
         let _ = append_log(
             &self.paths.logs,
             "INFO",
@@ -1034,6 +1022,17 @@ impl AppCore {
             ),
         );
         Ok(())
+    }
+
+    fn restore_git_state(&self, previous: Option<&[u8]>, registered_before: bool) {
+        if let Some(bytes) = previous {
+            let _ = atomic_write(&self.paths.gitconfig, bytes);
+        }
+        if registered_before {
+            let _ = git::register_include(&self.paths.gitconfig);
+        } else {
+            let _ = git::unregister_include(&self.paths.gitconfig);
+        }
     }
 
     pub fn update_settings(&self, minutes: u32, log_level: &str) -> Result<AppSnapshot, String> {
@@ -1066,7 +1065,6 @@ impl AppCore {
         let pairs = self.node_pairs()?;
         let routes = self.routes()?;
         self.write_configuration(&mut settings, &pairs, &routes)?;
-        atomic_write_json(&self.paths.settings, &settings)?;
         let _ = append_log(
             &self.paths.logs,
             "INFO",
@@ -1090,7 +1088,7 @@ impl AppCore {
         if repaired_empty_allowlist {
             settings.acceleration_enabled = false;
         }
-        if !registered {
+        if !registered && !settings.acceleration_enabled {
             if repaired_empty_allowlist {
                 atomic_write_json(&self.paths.settings, &settings)?;
             }
@@ -1104,7 +1102,7 @@ impl AppCore {
             settings.current_node_id = None;
         }
         self.write_configuration(&mut settings, &pairs, &routes)?;
-        atomic_write_json(&self.paths.settings, &settings)
+        Ok(())
     }
 
     pub fn restore_git_config(&self) -> Result<AppSnapshot, String> {
@@ -1114,15 +1112,23 @@ impl AppCore {
         settings.line_mode = LineMode::Direct;
         settings.current_node_id = None;
         let content = git::build_config(&settings, None, &[], Some(&self.paths.trace_socket))?;
+        let previous = fs::read(&self.paths.gitconfig).ok();
+        let registered_before = git::include_registered(&self.paths.gitconfig);
         let _ = backup_file(
             &self.paths.gitconfig,
             &self.paths.backups,
             "before-restore.gitconfig",
         );
         atomic_write(&self.paths.gitconfig, content.as_bytes())?;
-        git::unregister_include(&self.paths.gitconfig)?;
+        if let Err(error) = git::unregister_include(&self.paths.gitconfig) {
+            self.restore_git_state(previous.as_deref(), registered_before);
+            return Err(error);
+        }
         settings.last_applied_at = Some(Utc::now());
-        atomic_write_json(&self.paths.settings, &settings)?;
+        if let Err(error) = atomic_write_json(&self.paths.settings, &settings) {
+            self.restore_git_state(previous.as_deref(), registered_before);
+            return Err(format!("保存设置失败，Git 配置已回滚：{error}"));
+        }
         let _ = append_log(
             &self.paths.logs,
             "INFO",
@@ -1306,6 +1312,64 @@ impl AppCore {
             report_text,
         })
     }
+}
+
+fn validate_configuration(
+    config_path: &Path,
+    settings: &Settings,
+    selected: Option<&NodeDefinition>,
+    routes: &[RouteEntry],
+) -> Result<(), String> {
+    let node = selected.ok_or_else(|| "没有通过检测的可用节点".to_string())?;
+    let mut checks = Vec::new();
+    match settings.route_scope {
+        RouteScope::Global => {
+            let suffix = TEST_REPOSITORY
+                .strip_prefix("https://github.com/")
+                .expect("内置测试地址始终是 GitHub HTTPS 地址");
+            checks.push((
+                TEST_REPOSITORY.to_string(),
+                format!("{}{suffix}", node.rewrite_base),
+            ));
+        }
+        RouteScope::Allowlist => {
+            if routes.is_empty() {
+                return Err("仅加速清单为空".into());
+            }
+            for route in routes {
+                let suffix = route
+                    .repository_url
+                    .strip_prefix("https://github.com/")
+                    .ok_or_else(|| "清单路由不是 GitHub HTTPS 地址".to_string())?;
+                checks.push((
+                    route.repository_url.clone(),
+                    format!("{}{suffix}", node.rewrite_base),
+                ));
+            }
+            let mut unlisted =
+                "https://github.com/gitboost-validation/not-in-allowlist.git".to_string();
+            while routes.iter().any(|route| {
+                route
+                    .repository_url
+                    .strip_suffix(".git")
+                    .is_some_and(|prefix| unlisted.starts_with(prefix))
+            }) {
+                unlisted.insert_str(unlisted.len() - 4, "-check");
+            }
+            checks.push((unlisted.clone(), unlisted));
+        }
+    }
+
+    for (original, expected_fetch) in checks {
+        let (fetch, push) = git::effective_urls(config_path, &original)?;
+        if fetch != expected_fetch {
+            return Err(format!("配置未正确处理 fetch：{original}"));
+        }
+        if push != original {
+            return Err(format!("配置未保持 push 直连：{original}"));
+        }
+    }
+    Ok(())
 }
 
 fn sanitize_repository(raw: &str, nodes: &[NodeDefinition]) -> Option<String> {
@@ -1556,50 +1620,37 @@ where
 }
 
 fn fetch_system_catalog_url(url: &str) -> Result<Vec<u8>, String> {
-    let mut command = Command::new("curl");
-    command.args([
-        "--location",
-        "--silent",
-        "--show-error",
-        "--fail",
-        "--proto",
-        "=https",
-        "--proto-redir",
-        "=https",
-        "--connect-timeout",
-        "4",
-        "--max-time",
-        CATALOG_TIMEOUT_SECONDS,
-        "--max-filesize",
-        CATALOG_MAX_BYTES,
+    http::fetch_limited(
         url,
-    ]);
-    hide_catalog_console(&mut command);
-    let output = command
-        .output()
-        .map_err(|error| format!("{url}: {error}"))?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr);
-        return Err(format!(
-            "{url}: {}",
-            detail.lines().next().unwrap_or("请求失败")
-        ));
-    }
-    Ok(output.stdout)
+        Duration::from_secs(4),
+        Duration::from_secs(10),
+        CATALOG_MAX_BYTES,
+    )
+    .map_err(|error| format!("{url}: {error}"))
 }
-
-#[cfg(target_os = "windows")]
-fn hide_catalog_console(command: &mut Command) {
-    use std::os::windows::process::CommandExt;
-    command.creation_flags(0x0800_0000);
-}
-
-#[cfg(not(target_os = "windows"))]
-fn hide_catalog_console(_command: &mut Command) {}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn rerun_with_isolated_git(test_name: &str, marker: &str) -> bool {
+        if std::env::var_os(marker).is_some() {
+            return false;
+        }
+        let sandbox = tempfile::tempdir().unwrap();
+        let home = sandbox.path().join("home");
+        fs::create_dir(&home).unwrap();
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test_name, "--nocapture"])
+            .env(marker, "1")
+            .env("GIT_CONFIG_GLOBAL", sandbox.path().join("global.gitconfig"))
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("HOME", home)
+            .status()
+            .unwrap();
+        assert!(status.success(), "isolated Git test failed: {test_name}");
+        true
+    }
 
     fn encrypted_catalog(urls: &[&str]) -> Vec<u8> {
         let nonce = [0u8; 12];
@@ -1678,6 +1729,157 @@ mod tests {
 
         assert_eq!(settings.health_check_minutes, DEFAULT_HEALTH_CHECK_MINUTES);
         assert_eq!(settings.log_level, "debug");
+    }
+
+    #[test]
+    fn quarantines_and_rebuilds_corrupt_state_files() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        atomic_write(&core.paths.settings, b"{").unwrap();
+        atomic_write(&core.paths.health, b"[]").unwrap();
+        atomic_write(&core.paths.routes, b"{}").unwrap();
+        drop(core);
+
+        let restarted = AppCore::new(directory.path().to_path_buf()).unwrap();
+
+        assert!(!restarted.settings().unwrap().acceleration_enabled);
+        assert!(restarted.health().unwrap().is_empty());
+        assert!(restarted.routes().unwrap().is_empty());
+        let backup_names = fs::read_dir(&restarted.paths.backups)
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>();
+        assert!(backup_names
+            .iter()
+            .any(|name| name.ends_with("corrupt-settings.json")));
+        assert!(backup_names
+            .iter()
+            .any(|name| name.ends_with("corrupt-health.json")));
+        assert!(backup_names
+            .iter()
+            .any(|name| name.ends_with("corrupt-routes.json")));
+    }
+
+    #[test]
+    fn validates_every_allowlist_route_and_an_unlisted_repository() {
+        const MARKER: &str = "GITBOOST_VALIDATE_ALL_ROUTES_CHILD";
+        if rerun_with_isolated_git(
+            "core::tests::validates_every_allowlist_route_and_an_unlisted_repository",
+            MARKER,
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let node = NodeDefinition::fastgit();
+        let settings = Settings {
+            acceleration_enabled: true,
+            route_scope: RouteScope::Allowlist,
+            line_mode: LineMode::Fixed,
+            fixed_node_id: Some(node.id.clone()),
+            current_node_id: Some(node.id.clone()),
+            ..Settings::default()
+        };
+        let routes = ["openai/codex", "octocat/Hello-World"]
+            .into_iter()
+            .map(|repository| RouteEntry {
+                id: repository.into(),
+                repository_url: format!("https://github.com/{repository}.git"),
+                created_at: Utc::now(),
+            })
+            .collect::<Vec<_>>();
+        let complete = git::build_config(
+            &settings,
+            Some(&node),
+            &routes,
+            Some(&core.paths.trace_socket),
+        )
+        .unwrap();
+        atomic_write(&core.paths.gitconfig, complete.as_bytes()).unwrap();
+        validate_configuration(&core.paths.gitconfig, &settings, Some(&node), &routes).unwrap();
+
+        let incomplete = git::build_config(
+            &settings,
+            Some(&node),
+            &routes[..1],
+            Some(&core.paths.trace_socket),
+        )
+        .unwrap();
+        atomic_write(&core.paths.gitconfig, incomplete.as_bytes()).unwrap();
+        let error = validate_configuration(&core.paths.gitconfig, &settings, Some(&node), &routes)
+            .unwrap_err();
+        assert!(error.contains("octocat/Hello-World"));
+    }
+
+    #[test]
+    fn startup_reconciles_missing_include_and_rolls_back_on_state_write_failure() {
+        const MARKER: &str = "GITBOOST_STARTUP_RECONCILE_CHILD";
+        if rerun_with_isolated_git(
+            "core::tests::startup_reconciles_missing_include_and_rolls_back_on_state_write_failure",
+            MARKER,
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let route = RouteEntry {
+            id: "route".into(),
+            repository_url: "https://github.com/openai/codex.git".into(),
+            created_at: Utc::now(),
+        };
+        atomic_write_json(&core.paths.routes, &vec![route]).unwrap();
+        atomic_write_json(
+            &core.paths.health,
+            &HashMap::from([(
+                FASTGIT_REWRITE_BASE.to_string(),
+                HealthSummary {
+                    status: NodeStatus::Available,
+                    in_auto_pool: true,
+                    success_count: 1,
+                    attempt_count: 1,
+                    ..HealthSummary::default()
+                },
+            )]),
+        )
+        .unwrap();
+        let settings = Settings {
+            acceleration_enabled: true,
+            current_node_id: Some(FASTGIT_REWRITE_BASE.into()),
+            ..Settings::default()
+        };
+        atomic_write_json(&core.paths.settings, &settings).unwrap();
+
+        assert!(!git::include_registered(&core.paths.gitconfig));
+        core.refresh_registered_configuration().unwrap();
+        assert!(git::include_registered(&core.paths.gitconfig));
+        let (fetch, push) =
+            git::effective_urls(&core.paths.gitconfig, "https://github.com/openai/codex.git")
+                .unwrap();
+        assert_eq!(fetch, format!("{FASTGIT_REWRITE_BASE}openai/codex.git"));
+        assert_eq!(push, "https://github.com/openai/codex.git");
+
+        atomic_write(&core.paths.gitconfig, b"# externally changed\n").unwrap();
+        core.refresh_registered_configuration().unwrap();
+        assert!(fs::read_to_string(&core.paths.gitconfig)
+            .unwrap()
+            .contains(FASTGIT_REWRITE_BASE));
+
+        let previous_config = fs::read(&core.paths.gitconfig).unwrap();
+        let previous_settings = fs::read(&core.paths.settings).unwrap();
+        let mut next_settings = core.settings().unwrap();
+        let pairs = core.node_pairs().unwrap();
+        let routes = core.routes().unwrap();
+        fs::remove_file(&core.paths.settings).unwrap();
+        fs::create_dir(&core.paths.settings).unwrap();
+        let error = core
+            .write_configuration(&mut next_settings, &pairs, &routes)
+            .unwrap_err();
+        assert!(error.contains("Git 配置已回滚"));
+        assert_eq!(fs::read(&core.paths.gitconfig).unwrap(), previous_config);
+        assert!(git::include_registered(&core.paths.gitconfig));
+        fs::remove_dir(&core.paths.settings).unwrap();
+        atomic_write(&core.paths.settings, &previous_settings).unwrap();
+        git::unregister_include(&core.paths.gitconfig).unwrap();
     }
 
     #[test]
@@ -2374,6 +2576,38 @@ mod tests {
         );
         assert!(report.explicit_push_url.is_none());
         assert!(report.report_text.contains("显式 pushurl: 检查失败"));
+    }
+
+    #[test]
+    #[ignore = "requires live CDN and GitHub access"]
+    fn live_https_client_works_without_external_curl() {
+        const CHILD_MARKER: &str = "GITBOOST_HTTP_CLIENT_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let empty_path = tempfile::tempdir().unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--ignored",
+                    "--exact",
+                    "core::tests::live_https_client_works_without_external_curl",
+                    "--nocapture",
+                ])
+                .env(CHILD_MARKER, "1")
+                .env("PATH", empty_path.path())
+                .status()
+                .unwrap();
+            assert!(status.success(), "application-owned HTTPS client failed");
+            return;
+        }
+
+        let catalog = fetch_system_catalog().unwrap();
+        assert!(!parse_system_catalog(&catalog).unwrap().is_empty());
+        http::probe_range(
+            "https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip",
+            Duration::from_secs(4),
+            Duration::from_secs(15),
+            65_536,
+        )
+        .unwrap();
     }
 
     #[test]

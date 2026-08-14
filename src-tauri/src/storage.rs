@@ -24,6 +24,33 @@ pub fn load_json<T: DeserializeOwned + Default>(path: &Path) -> Result<T, String
     serde_json::from_slice(&bytes).map_err(|error| format!("{} 数据损坏：{error}", path.display()))
 }
 
+pub fn load_or_rebuild_json<T>(
+    path: &Path,
+    backups_dir: &Path,
+    backup_label: &str,
+) -> Result<(T, bool), String>
+where
+    T: DeserializeOwned + Default + Serialize,
+{
+    if !path.exists() {
+        let value = T::default();
+        atomic_write_json(path, &value)?;
+        return Ok((value, false));
+    }
+    match load_json(path) {
+        Ok(value) => Ok((value, false)),
+        Err(load_error) => {
+            backup_file(path, backups_dir, backup_label).map_err(|backup_error| {
+                format!("{load_error}；隔离损坏文件失败：{backup_error}")
+            })?;
+            let value = T::default();
+            atomic_write_json(path, &value)
+                .map_err(|write_error| format!("{load_error}；重建默认数据失败：{write_error}"))?;
+            Ok((value, true))
+        }
+    }
+}
+
 pub fn atomic_write_json<T: Serialize>(path: &Path, value: &T) -> Result<(), String> {
     let parent = path
         .parent()

@@ -1,12 +1,14 @@
-use crate::models::{DownloadTarget, NodeDefinition};
-use std::process::Command;
+use crate::{
+    http,
+    models::{DownloadTarget, NodeDefinition},
+};
+use std::{process::Command, time::Duration};
 use url::Url;
 
 #[cfg(target_os = "windows")]
 use std::os::windows::process::CommandExt;
 
-const PROBE_TIMEOUT_SECONDS: &str = "8";
-const PROBE_MAX_BYTES: &str = "65536";
+const PROBE_MAX_BYTES: usize = 65_536;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
@@ -96,69 +98,13 @@ fn normalize_github_url(input: &str) -> Result<(String, String), String> {
 }
 
 fn probe(target: &DownloadTarget) -> Result<(), String> {
-    let mut command = Command::new("curl");
-    command.args([
-        "--location",
-        "--silent",
-        "--show-error",
-        "--fail",
-        "--proto",
-        "=https",
-        "--proto-redir",
-        "=https",
-        "--range",
-        "0-0",
-        "--max-filesize",
-        PROBE_MAX_BYTES,
-        "--connect-timeout",
-        "4",
-        "--max-time",
-        PROBE_TIMEOUT_SECONDS,
-        "--output",
-        null_device(),
-        "--write-out",
-        "%{http_code}",
+    http::probe_range(
         &target.accelerated_url,
-    ]);
-    hide_console(&mut command);
-    let output = command
-        .output()
-        .map_err(|error| format!("无法运行下载探测：{error}"))?;
-    let summary = String::from_utf8_lossy(&output.stdout);
-    let http_code = summary.trim();
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    if classify_probe(http_code, output.status.code(), &stderr) {
-        return Ok(());
-    }
-    let detail = stderr
-        .lines()
-        .find(|line| !line.trim().is_empty())
-        .unwrap_or_default()
-        .trim();
-    if detail.is_empty() {
-        Err(format!("无法通过 {} 获取此文件", target.node_name))
-    } else {
-        Err(format!(
-            "无法通过 {} 获取此文件：{detail}",
-            target.node_name
-        ))
-    }
-}
-
-#[cfg(target_os = "windows")]
-fn null_device() -> &'static str {
-    "NUL"
-}
-
-#[cfg(not(target_os = "windows"))]
-fn null_device() -> &'static str {
-    "/dev/null"
-}
-
-fn classify_probe(http_code: &str, exit_code: Option<i32>, stderr: &str) -> bool {
-    let reached_probe_limit = stderr.contains("Exceeded the maximum allowed file size");
-    matches!(http_code, "200" | "206")
-        && (matches!(exit_code, Some(0) | Some(63)) || reached_probe_limit)
+        Duration::from_secs(4),
+        Duration::from_secs(8),
+        PROBE_MAX_BYTES,
+    )
+    .map_err(|error| format!("无法通过 {} 获取此文件：{error}", target.node_name))
 }
 
 #[cfg(test)]
@@ -215,28 +161,5 @@ mod tests {
         );
         assert_eq!(target.node_id, crate::models::FASTGIT_REWRITE_BASE);
         assert_eq!(target.node_name, "FastGit");
-    }
-
-    #[test]
-    fn classifies_limited_probes_by_status() {
-        assert!(classify_probe("206", Some(0), ""));
-        assert!(classify_probe("200", Some(63), ""));
-        assert!(classify_probe("200", Some(0), ""));
-        assert!(classify_probe(
-            "200",
-            Some(56),
-            "curl: (56) Exceeded the maximum allowed file size (65536) with 65536 bytes"
-        ));
-        assert!(!classify_probe(
-            "200",
-            Some(56),
-            "curl: (56) Failure when receiving data from the peer"
-        ));
-        assert!(!classify_probe(
-            "404",
-            Some(56),
-            "curl: (56) Exceeded the maximum allowed file size (65536) with 65536 bytes"
-        ));
-        assert!(!classify_probe("404", Some(22), ""));
     }
 }

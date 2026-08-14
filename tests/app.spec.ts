@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import type { AppSnapshot } from "../src/types";
 
 test("core desktop workflow is navigable", async ({ page }) => {
   const errors: string[] = [];
@@ -42,9 +43,9 @@ test("core desktop workflow is navigable", async ({ page }) => {
 
 test("system node refresh reports whether the catalog changed", async ({ page }) => {
   await page.addInitScript(() => {
-    const snapshot = {
+    const snapshot: AppSnapshot = {
       settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
-      nodes: [{ id: "system", name: "system", rewriteBase: "https://proxy.example/https://github.com/", enabled: true, builtIn: true, health: { status: "untested", successCount: 0, attemptCount: 0, medianLatencyMs: null, consecutiveFailures: 0, checkedAt: null, failureReason: null } }],
+      nodes: [{ id: "system", name: "system", rewriteBase: "https://proxy.example/https://github.com/", enabled: true, builtIn: true, health: { status: "untested", inAutoPool: false, successCount: 0, attemptCount: 0, medianLatencyMs: null, consecutiveFailures: 0, checkedAt: null, failureReason: null } }],
       routes: [],
       environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
     };
@@ -67,18 +68,18 @@ test("system node refresh reports whether the catalog changed", async ({ page })
 
 test("file download can retry with the next available line", async ({ page }) => {
   await page.addInitScript(() => {
-    const nodes = [
-      { id: "node-one", name: "Node One", rewriteBase: "https://one.example/https://github.com/", enabled: true, builtIn: false, health: { status: "available", successCount: 2, attemptCount: 2, medianLatencyMs: 20, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } },
-      { id: "node-two", name: "Node Two", rewriteBase: "https://two.example/https://github.com/", enabled: true, builtIn: false, health: { status: "slow", successCount: 1, attemptCount: 1, medianLatencyMs: 80, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } },
+    const nodes: AppSnapshot["nodes"] = [
+      { id: "node-one", name: "Node One", rewriteBase: "https://one.example/https://github.com/", enabled: true, builtIn: false, health: { status: "available", inAutoPool: true, successCount: 2, attemptCount: 2, medianLatencyMs: 20, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } },
+      { id: "node-two", name: "Node Two", rewriteBase: "https://two.example/https://github.com/", enabled: true, builtIn: false, health: { status: "slow", inAutoPool: true, successCount: 1, attemptCount: 1, medianLatencyMs: 80, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } },
     ];
-    const snapshot = {
+    const snapshot: AppSnapshot = {
       settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: "node-one", healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
       nodes,
       routes: [],
       environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
     };
     const calls: { command: string; args: Record<string, unknown> }[] = [];
-    const target = (node: typeof nodes[number]) => ({ originalUrl: "https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip", acceleratedUrl: `${node.rewriteBase}DiscoverBox/gitboost/archive/refs/heads/main.zip`, fileName: "main.zip", nodeId: node.id, nodeName: node.name });
+    const target = (node: AppSnapshot["nodes"][number]) => ({ originalUrl: "https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip", acceleratedUrl: `${node.rewriteBase}DiscoverBox/gitboost/archive/refs/heads/main.zip`, fileName: "main.zip", nodeId: node.id, nodeName: node.name });
     Object.assign(window, {
       __downloadCalls: calls,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, unknown> = {}) => {
@@ -121,9 +122,9 @@ test("file download can retry with the next available line", async ({ page }) =>
 
 test("full node detection shows determinate progress", async ({ page }) => {
   await page.addInitScript(() => {
-    const snapshot = {
+    const snapshot: AppSnapshot = {
       settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
-      nodes: [{ id: "system", name: "system", rewriteBase: "https://proxy.example/https://github.com/", enabled: true, builtIn: true, health: { status: "untested", successCount: 0, attemptCount: 0, medianLatencyMs: null, consecutiveFailures: 0, checkedAt: null, failureReason: null } }],
+      nodes: [{ id: "system", name: "system", rewriteBase: "https://proxy.example/https://github.com/", enabled: true, builtIn: true, health: { status: "untested", inAutoPool: false, successCount: 0, attemptCount: 0, medianLatencyMs: null, consecutiveFailures: 0, checkedAt: null, failureReason: null } }],
       routes: [],
       environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
     };
@@ -147,15 +148,21 @@ test("full node detection shows determinate progress", async ({ page }) => {
           }
           if (command === "plugin:event|unlisten") return undefined;
           if (command === "test_all_nodes") {
-            listeners.get("node-test-progress")?.({ event: "node-test-progress", id: 1, payload: { completed: 7, total: 18 } });
-            return new Promise((resolve) => { completeNodeTest = () => resolve(snapshot.nodes); });
+            listeners.get("node-test-progress")?.({ event: "node-test-progress", id: 1, payload: { completed: 7, total: 18, finished: false } });
+            return new Promise((resolve) => { completeNodeTest = () => {
+              listeners.get("node-test-progress")?.({ event: "node-test-progress", id: 1, payload: { completed: 0, total: 0, finished: true } });
+              resolve(snapshot.nodes);
+            }; });
           }
           return snapshot;
         },
       },
       completeNodeTest: () => completeNodeTest?.(),
       emitNodeTestProgress: (completed: number, total: number) => {
-        listeners.get("node-test-progress")?.({ event: "node-test-progress", id: 1, payload: { completed, total } });
+        listeners.get("node-test-progress")?.({ event: "node-test-progress", id: 1, payload: { completed, total, finished: false } });
+      },
+      emitNodeTestFinished: () => {
+        listeners.get("node-test-progress")?.({ event: "node-test-progress", id: 1, payload: { completed: 0, total: 0, finished: true } });
       },
     });
   });
@@ -167,6 +174,8 @@ test("full node detection shows determinate progress", async ({ page }) => {
   await expect(lineControl.getByRole("button", { name: "检测中 3/18" })).toBeDisabled();
   await expect(page.getByRole("progressbar", { name: "线路检测进度 3/18" })).toBeVisible();
   await page.evaluate(() => (window as typeof window & { emitNodeTestProgress: (completed: number, total: number) => void }).emitNodeTestProgress(18, 18));
+  await expect(page.getByRole("progressbar", { name: "线路检测进度 18/18" })).toBeVisible();
+  await page.evaluate(() => (window as typeof window & { emitNodeTestFinished: () => void }).emitNodeTestFinished());
   await expect(page.getByRole("progressbar")).toHaveCount(0);
   await expect(lineControl.getByRole("button", { name: "重新测速" })).toBeEnabled();
 
@@ -186,9 +195,9 @@ test("full node detection shows determinate progress", async ({ page }) => {
 
 test("core workflow UI responds to command results", async ({ page }) => {
   await page.addInitScript(() => {
-    const snapshot = {
+    const snapshot: AppSnapshot = {
       settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null as string | null },
-      nodes: [{ id: "verified-node", name: "Verified Node", rewriteBase: "https://proxy.integration.test/https://github.com/", enabled: true, builtIn: false, health: { status: "available", successCount: 2, attemptCount: 2, medianLatencyMs: 25, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } }],
+      nodes: [{ id: "verified-node", name: "Verified Node", rewriteBase: "https://proxy.integration.test/https://github.com/", enabled: true, builtIn: false, health: { status: "available", inAutoPool: true, successCount: 2, attemptCount: 2, medianLatencyMs: 25, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } }],
       routes: [] as { id: string; repositoryUrl: string; createdAt: string }[],
       environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
     };
@@ -299,7 +308,7 @@ test("node import keeps failures open and reports actual results", async ({ page
   await page.getByRole("button", { name: "添加节点" }).click();
 
   await page.evaluate(() => {
-    const snapshot = {
+    const snapshot: AppSnapshot = {
       settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
       nodes: [], routes: [],
       environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
@@ -336,7 +345,7 @@ test("route list shows full addresses and filters existing repositories", async 
 
   const longUrl = "https://github.com/organization-with-a-very-long-name/repository-with-a-very-long-name.git";
   await page.evaluate((repositoryUrl) => {
-    const snapshot = {
+    const snapshot: AppSnapshot = {
       settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
       nodes: [],
       routes: [
