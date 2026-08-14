@@ -25,9 +25,12 @@ use std::{
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-const SYSTEM_NODE_CATALOG_URLS: [&str; 2] = [
-    "https://cdn.jsdelivr.net/gh/DiscoverBox/gitboost@main/nodes.json",
-    "https://cdn.jsdmirror.cn/gh/DiscoverBox/gitboost@main/nodes.json",
+const SYSTEM_NODE_CATALOG_URLS: [&str; 5] = [
+    "https://cdn.jsdelivr.net/gh/DiscoverBox/gitboost@main/nodes.enc.json",
+    "https://cdn.jsdmirror.cn/gh/DiscoverBox/gitboost@main/nodes.enc.json",
+    "https://jsdelivr.topthink.com/gh/DiscoverBox/gitboost@main/nodes.enc.json",
+    "https://www.webcache.cn/gh/DiscoverBox/gitboost@main/nodes.enc.json",
+    "https://www.upcache.cn/gh/DiscoverBox/gitboost@main/nodes.enc.json",
 ];
 const SYSTEM_NODE_CATALOG_KEY: [u8; 32] = [
     0x2d, 0xbf, 0x43, 0xf2, 0x77, 0xa1, 0x09, 0x79, 0xcb, 0x9e, 0x06, 0xe7, 0x2b, 0x0d, 0xdb, 0x71,
@@ -1301,7 +1304,7 @@ mod tests {
 
     #[test]
     fn system_catalog_is_encrypted_and_authenticated() {
-        let bytes = include_bytes!("../../nodes.json");
+        let bytes = include_bytes!("../../nodes.enc.json");
         let urls = parse_system_catalog(bytes).unwrap();
         assert_eq!(urls.len(), 18);
         assert_eq!(urls[0], FASTGIT_REWRITE_BASE);
@@ -1325,19 +1328,19 @@ mod tests {
     }
 
     #[test]
-    fn system_catalog_uses_the_mirror_when_the_primary_fails() {
+    fn system_catalog_tries_each_fallback_in_order() {
         let mut requested = Vec::new();
         let output = fetch_system_catalog_from(&SYSTEM_NODE_CATALOG_URLS, |url| {
             requested.push(url.to_string());
-            if url.contains("cdn.jsdelivr.net") {
-                Err("primary unavailable".into())
+            if url.contains("upcache.cn") {
+                Ok(include_bytes!("../../nodes.enc.json").to_vec())
             } else {
-                Ok(include_bytes!("../../nodes.json").to_vec())
+                Err("catalog unavailable".into())
             }
         })
         .unwrap();
 
-        assert_eq!(output, include_bytes!("../../nodes.json"));
+        assert_eq!(output, include_bytes!("../../nodes.enc.json"));
         assert_eq!(requested, SYSTEM_NODE_CATALOG_URLS);
     }
 

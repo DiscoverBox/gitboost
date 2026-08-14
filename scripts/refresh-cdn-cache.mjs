@@ -7,7 +7,7 @@ const sleep = (milliseconds) =>
 export async function refreshCdnCache({
   repository,
   ref,
-  filePath = "nodes.json",
+  filePath = "nodes.enc.json",
   readFileImpl = readFile,
   fetchImpl = fetch,
   wait = sleep,

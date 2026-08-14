@@ -5,9 +5,9 @@ import { refreshCdnCache } from "./refresh-cdn-cache.mjs";
 
 const repository = "DiscoverBox/gitboost";
 const ref = "main";
-const cdnPath = `/gh/${repository}@${ref}/nodes.json`;
+const cdnPath = `/gh/${repository}@${ref}/nodes.enc.json`;
 
-test("purges jsDelivr and waits for JSDMirror to match nodes.json", async () => {
+test("purges jsDelivr and waits for JSDMirror to match nodes.enc.json", async () => {
   const expectedContent = '{"version":1}\n';
 
   let mirrorChecks = 0;
