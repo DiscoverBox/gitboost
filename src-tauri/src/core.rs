@@ -45,6 +45,7 @@ pub struct AppCore {
     paths: AppPaths,
     lock: Mutex<()>,
     full_node_test_lock: Mutex<()>,
+    full_node_test_result: Mutex<Option<Result<Vec<NodeEntry>, String>>>,
     usage_listening: AtomicBool,
 }
 
@@ -95,6 +96,7 @@ impl AppCore {
             paths,
             lock: Mutex::new(()),
             full_node_test_lock: Mutex::new(()),
+            full_node_test_result: Mutex::new(None),
             usage_listening: AtomicBool::new(false),
         };
         core.initialize()?;
@@ -169,13 +171,16 @@ impl AppCore {
         self.paths.trace_socket.clone()
     }
 
-    pub fn refresh_system_nodes(&self) -> Result<bool, String> {
+    pub fn refresh_system_nodes_with_progress<F>(&self, on_progress: F) -> Result<bool, String>
+    where
+        F: Fn(usize, usize) + Sync,
+    {
         let update = fetch_system_catalog().and_then(|output| self.apply_system_catalog(&output));
         let wait = update.as_ref().is_ok_and(|update| update.changed);
         let Some(_run) = self.acquire_full_node_test(wait) else {
             return update.map(|update| update.changed);
         };
-        let tested = self.test_all_nodes_locked(&|_, _| {});
+        let tested = self.execute_full_node_test_locked(&on_progress);
         let update = update?;
         tested?;
         if let Some(applied_at) = update.recovery_applied_at.as_ref() {
@@ -299,24 +304,54 @@ impl AppCore {
         })
     }
 
-    pub fn prepare_download(&self, original_url: &str) -> Result<DownloadTarget, String> {
+    pub fn prepare_download_excluding(
+        &self,
+        original_url: &str,
+        excluded_node_ids: &[String],
+    ) -> Result<DownloadTarget, String> {
         let settings = self.settings()?;
-        let pairs = self.node_pairs()?;
+        let pairs: Vec<_> = self
+            .node_pairs()?
+            .into_iter()
+            .filter(|(node, _)| !excluded_node_ids.contains(&node.id))
+            .collect();
         let current = settings.current_node_id.as_deref().and_then(|id| {
             pairs
                 .iter()
                 .find(|(node, _)| node.id == id && node.enabled)
                 .map(|(node, _)| node)
         });
-        let node = current
-            .or_else(|| git::choose_node(&pairs))
+        let preferred = current.or_else(|| git::choose_node(&pairs));
+        let node = preferred
             .or_else(|| {
+                if !excluded_node_ids.is_empty() {
+                    return None;
+                }
                 pairs
                     .iter()
                     .find(|(node, _)| node.enabled)
                     .map(|(node, _)| node)
             })
-            .ok_or_else(|| "没有已启用的下载节点".to_string())?;
+            .ok_or_else(|| {
+                if excluded_node_ids.is_empty() {
+                    "没有已启用的下载节点".to_string()
+                } else {
+                    "没有其他已检测可用的下载线路".to_string()
+                }
+            })?;
+        downloads::prepare_target(original_url, node)
+    }
+
+    pub fn prepare_download_with_node(
+        &self,
+        original_url: &str,
+        node_id: &str,
+    ) -> Result<DownloadTarget, String> {
+        let nodes = self.nodes()?;
+        let node = nodes
+            .iter()
+            .find(|node| node.id == node_id && node.enabled)
+            .ok_or_else(|| "下载线路不存在或已停用".to_string())?;
         downloads::prepare_target(original_url, node)
     }
 
@@ -454,10 +489,6 @@ impl AppCore {
         })
     }
 
-    pub fn test_all_nodes(&self) -> Result<Vec<NodeEntry>, String> {
-        self.test_all_nodes_with_progress(|_, _| {})
-    }
-
     pub fn test_all_nodes_with_progress<F>(&self, on_progress: F) -> Result<Vec<NodeEntry>, String>
     where
         F: Fn(usize, usize) + Sync,
@@ -466,7 +497,35 @@ impl AppCore {
             .full_node_test_lock
             .try_lock()
             .ok_or_else(|| "全量线路检测正在进行，请稍后再试".to_string())?;
-        self.test_all_nodes_locked(&on_progress)
+        self.execute_full_node_test_locked(&on_progress)
+    }
+
+    pub fn test_all_nodes_or_join_with_progress<F>(
+        &self,
+        on_progress: F,
+    ) -> Result<Vec<NodeEntry>, String>
+    where
+        F: Fn(usize, usize) + Sync,
+    {
+        let Some(_run) = self.full_node_test_lock.try_lock() else {
+            let _run = self.full_node_test_lock.lock();
+            return self
+                .full_node_test_result
+                .lock()
+                .clone()
+                .unwrap_or_else(|| Err("全量线路检测异常结束，未产生检测结果".into()));
+        };
+        self.execute_full_node_test_locked(&on_progress)
+    }
+
+    fn execute_full_node_test_locked<F>(&self, on_progress: &F) -> Result<Vec<NodeEntry>, String>
+    where
+        F: Fn(usize, usize) + Sync,
+    {
+        *self.full_node_test_result.lock() = None;
+        let result = self.test_all_nodes_locked(on_progress);
+        *self.full_node_test_result.lock() = Some(result.clone());
+        result
     }
 
     fn test_all_nodes_locked<F>(&self, on_progress: &F) -> Result<Vec<NodeEntry>, String>
@@ -1119,7 +1178,7 @@ where
     F: Fn(&NodeDefinition, &HealthSummary) -> HealthSummary + Sync,
 {
     let next = AtomicUsize::new(0);
-    let completed = AtomicUsize::new(0);
+    let completed = Mutex::new(0usize);
     let tested = Mutex::new(Vec::with_capacity(nodes.len()));
     on_progress(0, nodes.len());
     std::thread::scope(|scope| {
@@ -1138,7 +1197,9 @@ where
                     let previous = old_health.get(&node.id).cloned().unwrap_or_default();
                     let summary = test(node, &previous);
                     tested.lock().push((index, node.id.clone(), summary));
-                    on_progress(completed.fetch_add(1, Ordering::Relaxed) + 1, nodes.len());
+                    let mut completed = completed.lock();
+                    *completed += 1;
+                    on_progress(*completed, nodes.len());
                 })
             })
             .collect();
@@ -1396,11 +1457,43 @@ mod tests {
 
         let active = core.full_node_test_lock.lock();
         assert_eq!(
-            core.test_all_nodes().err().as_deref(),
+            core.test_all_nodes_with_progress(|_, _| {})
+                .err()
+                .as_deref(),
             Some("全量线路检测正在进行，请稍后再试")
         );
         drop(active);
         assert!(core.full_node_test_lock.try_lock().is_some());
+    }
+
+    #[test]
+    fn user_full_node_test_propagates_the_active_run_failure() {
+        use std::{sync::mpsc, time::Duration};
+
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let active = core.full_node_test_lock.lock();
+        *core.full_node_test_result.lock() = Some(Err("检测结果写入失败".into()));
+        let (joined, join_finished) = mpsc::channel();
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                joined
+                    .send(core.test_all_nodes_or_join_with_progress(|_, _| {}))
+                    .unwrap();
+            });
+            assert!(join_finished
+                .recv_timeout(Duration::from_millis(30))
+                .is_err());
+            drop(active);
+            assert_eq!(
+                join_finished
+                    .recv_timeout(Duration::from_secs(1))
+                    .unwrap()
+                    .unwrap_err(),
+                "检测结果写入失败"
+            );
+        });
     }
 
     #[test]
@@ -1516,16 +1609,19 @@ mod tests {
                 active.fetch_sub(1, Ordering::SeqCst);
                 HealthSummary::default()
             },
-            |completed, total| progress.lock().push((completed, total)),
+            |completed, total| {
+                if completed == 1 {
+                    std::thread::sleep(Duration::from_millis(30));
+                }
+                progress.lock().push((completed, total));
+            },
         )
         .unwrap();
 
         assert_eq!(tested.len(), 8);
         assert_eq!(maximum.load(Ordering::SeqCst), NODE_TEST_CONCURRENCY);
-        let mut progress = progress.into_inner();
-        progress.sort_unstable();
         assert_eq!(
-            progress,
+            progress.into_inner(),
             (0..=8).map(|completed| (completed, 8)).collect::<Vec<_>>()
         );
     }
@@ -1565,14 +1661,66 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let core = AppCore::new(directory.path().to_path_buf()).unwrap();
         let target = core
-            .prepare_download(
+            .prepare_download_excluding(
                 "https://github.com/ollama/ollama/releases/download/v1/OllamaSetup.exe",
+                &[],
             )
             .unwrap();
         assert_eq!(target.node_name, "fastgit.cc");
         assert_eq!(
             target.accelerated_url,
             "https://fastgit.cc/https://github.com/ollama/ollama/releases/download/v1/OllamaSetup.exe"
+        );
+    }
+
+    #[test]
+    fn prepares_download_with_the_next_available_node_without_changing_settings() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        core.import_nodes("https://one.example\nhttps://two.example")
+            .unwrap();
+        let nodes = core.custom_nodes().unwrap();
+        let first = &nodes[0];
+        let second = &nodes[1];
+        let mut health = HashMap::new();
+        for node in &nodes {
+            health.insert(
+                node.id.clone(),
+                HealthSummary {
+                    status: NodeStatus::Available,
+                    success_count: 1,
+                    attempt_count: 1,
+                    median_latency_ms: Some(if node.id == first.id { 10 } else { 20 }),
+                    ..HealthSummary::default()
+                },
+            );
+        }
+        atomic_write_json(&core.paths.health, &health).unwrap();
+        let settings = Settings {
+            current_node_id: Some(first.id.clone()),
+            ..Settings::default()
+        };
+        atomic_write_json(&core.paths.settings, &settings).unwrap();
+
+        let target = core
+            .prepare_download_excluding(
+                "https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip",
+                std::slice::from_ref(&first.id),
+            )
+            .unwrap();
+
+        assert_eq!(target.node_id, second.id);
+        assert_eq!(
+            core.settings().unwrap().current_node_id,
+            Some(first.id.clone())
+        );
+        assert_eq!(
+            core.prepare_download_excluding(
+                "https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip",
+                &[first.id.clone(), second.id.clone()],
+            )
+            .unwrap_err(),
+            "没有其他已检测可用的下载线路"
         );
     }
 
@@ -1622,6 +1770,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "requires live system-node and GitHub access"]
     fn core_workflow_applies_verifies_persists_and_restores_git_routing() {
         const CHILD_MARKER: &str = "GITBOOST_CORE_WORKFLOW_CHILD";
         if std::env::var_os(CHILD_MARKER).is_none() {
@@ -1630,6 +1779,7 @@ mod tests {
             fs::create_dir(&home).unwrap();
             let status = std::process::Command::new(std::env::current_exe().unwrap())
                 .args([
+                    "--ignored",
                     "--exact",
                     "core::tests::core_workflow_applies_verifies_persists_and_restores_git_routing",
                     "--nocapture",
@@ -1662,28 +1812,57 @@ mod tests {
         let root = directory.path().join("app-data");
         let core = AppCore::new(root.clone()).unwrap();
 
-        let imported = core.import_nodes("https://proxy.integration.test").unwrap();
-        assert_eq!(imported.imported, 1);
-        let node = imported
-            .nodes
+        let catalog = fetch_system_catalog().unwrap();
+        core.apply_system_catalog(&catalog).unwrap();
+        let progress = Mutex::new(Vec::new());
+        let started = std::sync::Barrier::new(2);
+        let release = std::sync::Barrier::new(2);
+        let owner_result = Mutex::new(None);
+        let joined_result = std::thread::scope(|scope| {
+            scope.spawn(|| {
+                *owner_result.lock() =
+                    Some(core.test_all_nodes_with_progress(|completed, total| {
+                        progress.lock().push((completed, total));
+                        if completed == 0 {
+                            started.wait();
+                            release.wait();
+                        }
+                    }));
+            });
+            started.wait();
+            scope.spawn(|| {
+                std::thread::sleep(std::time::Duration::from_millis(30));
+                release.wait();
+            });
+            core.test_all_nodes_or_join_with_progress(|_, _| {})
+        })
+        .unwrap();
+        let owner_result = owner_result.into_inner().unwrap().unwrap();
+        assert_eq!(
+            owner_result
+                .iter()
+                .map(|node| (&node.node.id, node.health.status))
+                .collect::<Vec<_>>(),
+            joined_result
+                .iter()
+                .map(|node| (&node.node.id, node.health.status))
+                .collect::<Vec<_>>()
+        );
+        let progress = progress.into_inner();
+        let total = core.nodes().unwrap().len();
+        assert_eq!(
+            progress,
+            (0..=total)
+                .map(|completed| (completed, total))
+                .collect::<Vec<_>>()
+        );
+
+        let node = owner_result
             .iter()
-            .find(|node| !node.node.built_in)
-            .unwrap();
+            .find(|node| matches!(node.health.status, NodeStatus::Available | NodeStatus::Slow))
+            .expect("live integration requires at least one usable system node");
         let node_id = node.node.id.clone();
         let rewrite_base = node.node.rewrite_base.clone();
-        let mut health = core.health().unwrap();
-        health.insert(
-            node_id.clone(),
-            HealthSummary {
-                status: NodeStatus::Available,
-                success_count: 2,
-                attempt_count: 2,
-                median_latency_ms: Some(25),
-                checked_at: Some(Utc::now()),
-                ..HealthSummary::default()
-            },
-        );
-        atomic_write_json(&core.paths.health, &health).unwrap();
 
         core.add_route("openai/codex").unwrap();
         let enabled = core.set_acceleration(true).unwrap();

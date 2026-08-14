@@ -98,6 +98,7 @@ export default function App() {
   const [nodeTestProgress, setNodeTestProgress] = useState<NodeTestProgress | null>(null);
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const nodeTestRunning = nodeTestProgress !== null && nodeTestProgress.completed < nodeTestProgress.total;
 
   const reload = useCallback(async () => setSnapshot(await getSnapshot()), []);
   useEffect(() => { reload().catch((error) => setToast({ kind: "error", text: errorMessage(error) })); }, [reload]);
@@ -105,7 +106,9 @@ export default function App() {
     if (!("__TAURI_INTERNALS__" in window)) return;
     const snapshotListener = listen<AppSnapshot>("snapshot-updated", (event) => setSnapshot(event.payload));
     const errorListener = listen<string>("operation-error", (event) => setToast({ kind: "error", text: event.payload }));
-    const progressListener = listen<NodeTestProgress>("node-test-progress", (event) => setNodeTestProgress(event.payload));
+    const progressListener = listen<NodeTestProgress>("node-test-progress", (event) => {
+      setNodeTestProgress(event.payload.completed < event.payload.total ? event.payload : null);
+    });
     return () => { snapshotListener.then((unlisten) => unlisten()); errorListener.then((unlisten) => unlisten()); progressListener.then((unlisten) => unlisten()); };
   }, []);
   useEffect(() => {
@@ -153,12 +156,12 @@ export default function App() {
         </div>
       </aside>
       <main className="main-content">
-        {page === "overview" && <Overview snapshot={snapshot} busy={busy} nodeTestProgress={nodeTestProgress} run={run} go={setPage} />}
+        {page === "overview" && <Overview snapshot={snapshot} busy={busy} nodeTestProgress={nodeTestProgress} nodeTestRunning={nodeTestRunning} run={run} go={setPage} />}
         {page === "routes" && <Routes snapshot={snapshot} busy={busy} run={run} />}
-        {page === "downloads" && <Downloads busy={busy} run={run} />}
+        {page === "downloads" && <Downloads snapshot={snapshot} busy={busy} run={run} />}
         {page === "usage" && <UsageLogs snapshot={snapshot} busy={busy} run={run} />}
         {page === "diagnostics" && <Diagnostics snapshot={snapshot} busy={busy} />}
-        {page === "settings" && <Settings snapshot={snapshot} busy={busy} nodeTestProgress={nodeTestProgress} run={run} onImport={() => setImportOpen(true)} />}
+        {page === "settings" && <Settings snapshot={snapshot} busy={busy} nodeTestProgress={nodeTestProgress} nodeTestRunning={nodeTestRunning} run={run} onImport={() => setImportOpen(true)} />}
       </main>
       {toast && <div className={`toast toast--${toast.kind}`}>{toast.text}</div>}
       {importOpen && <ImportNodes busy={busy} run={run} onClose={() => setImportOpen(false)} />}
@@ -168,7 +171,7 @@ export default function App() {
 
 type Runner = <T>(key: string, operation: () => Promise<T>, message?: string | ((result: T) => string | undefined)) => Promise<T>;
 
-function Overview({ snapshot, busy, nodeTestProgress, run, go }: { snapshot: AppSnapshot; busy: string | null; nodeTestProgress: NodeTestProgress | null; run: Runner; go: (page: PageKey) => void }) {
+function Overview({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, go }: { snapshot: AppSnapshot; busy: string | null; nodeTestProgress: NodeTestProgress | null; nodeTestRunning: boolean; run: Runner; go: (page: PageKey) => void }) {
   const node = currentNode(snapshot.nodes, snapshot.settings.currentNodeId);
   const usable = snapshot.nodes.filter((item) => item.enabled && ["available", "slow"].includes(item.health.status));
   const lineModeOptions: { value: LineMode; label: string }[] = [
@@ -196,11 +199,11 @@ function Overview({ snapshot, busy, nodeTestProgress, run, go }: { snapshot: App
 
       {!snapshot.environment.gitAvailable && <div className="notice notice--danger"><strong>未检测到系统 Git</strong><p>请先安装 Git（Windows 推荐 Git for Windows），然后再开启加速。</p></div>}
       {snapshot.environment.conflictScanError ? <div className="notice notice--danger"><strong>URL 重写冲突检查失败</strong><p>{snapshot.environment.conflictScanError}</p><Button tone="quiet" onClick={() => go("diagnostics")}>查看诊断</Button></div> : snapshot.environment.conflicts > 0 && <div className="notice notice--warning"><strong>发现 {snapshot.environment.conflicts} 条 URL 重写冲突</strong><p>GitBoost 不会覆盖它们。请先到环境诊断查看来源。</p><Button tone="quiet" onClick={() => go("diagnostics")}>查看诊断</Button></div>}
-      {!usable.length && <div className="notice"><strong>还没有通过验证的线路</strong><p>系统线路和自定义节点都必须先通过真实 Git 检测。</p><Button tone="quiet" busy={busy === "test-all"} busyLabel={nodeTestProgress ? `检测中 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "线路检测完成").catch(() => undefined)}>立即检测</Button></div>}
+      {!usable.length && <div className="notice"><strong>还没有通过验证的线路</strong><p>系统线路和自定义节点都必须先通过真实 Git 检测。</p><Button tone="quiet" busy={busy === "test-all" || nodeTestRunning} busyLabel={nodeTestProgress ? `检测中 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "线路检测完成").catch(() => undefined)}>立即检测</Button></div>}
 
       <section className="section-block">
-        <div className="section-title"><div><h2>线路控制</h2><p>切换只影响下一次 Git 操作；已开始的 clone 需要手动重试。</p></div><Button busy={busy === "test-all"} busyLabel={nodeTestProgress ? `检测中 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "节点检测完成").catch(() => undefined)}>重新测速</Button></div>
-        <NodeTestProgressLine progress={busy === "test-all" ? nodeTestProgress : null} />
+        <div className="section-title"><div><h2>线路控制</h2><p>切换只影响下一次 Git 操作；已开始的 clone 需要手动重试。</p></div><Button busy={busy === "test-all" || nodeTestRunning} busyLabel={nodeTestProgress ? `检测中 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "节点检测完成").catch(() => undefined)}>重新测速</Button></div>
+        <NodeTestProgressLine progress={nodeTestProgress} />
         <div className="control-row">
           <label>线路模式</label>
           <Segmented<LineMode> value={snapshot.settings.lineMode} options={lineModeOptions} onChange={(mode) => run("line-mode", () => api.setLineMode(mode, mode === "fixed" ? snapshot.settings.fixedNodeId : null), "线路模式已更新").catch(() => undefined)} />
@@ -212,7 +215,7 @@ function Overview({ snapshot, busy, nodeTestProgress, run, go }: { snapshot: App
   );
 }
 
-function CustomNodeSettings({ snapshot, busy, nodeTestProgress, run, onImport }: { snapshot: AppSnapshot; busy: string | null; nodeTestProgress: NodeTestProgress | null; run: Runner; onImport: () => void }) {
+function CustomNodeSettings({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, onImport }: { snapshot: AppSnapshot; busy: string | null; nodeTestProgress: NodeTestProgress | null; nodeTestRunning: boolean; run: Runner; onImport: () => void }) {
   const [editing, setEditing] = useState<NodeEntry | null>(null);
   const customNodes = snapshot.nodes.filter((node) => !node.builtIn);
   const systemCount = snapshot.nodes.length - customNodes.length;
@@ -220,9 +223,9 @@ function CustomNodeSettings({ snapshot, busy, nodeTestProgress, run, onImport }:
     <section className="section-block node-settings" aria-labelledby="custom-nodes-title">
       <div className="section-title">
         <div><h2 id="custom-nodes-title">自定义节点</h2><p>添加并管理自己的代理地址；系统节点仍由 GitBoost 自动维护。</p></div>
-        <div className="section-actions"><Button onClick={onImport}>添加节点</Button><Button busy={busy === "test-all"} busyLabel={nodeTestProgress ? `检测中 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "全部线路检测完成").catch(() => undefined)}>检测全部</Button></div>
+        <div className="section-actions"><Button onClick={onImport}>添加节点</Button><Button busy={busy === "test-all" || nodeTestRunning} busyLabel={nodeTestProgress ? `检测中 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "全部线路检测完成").catch(() => undefined)}>检测全部</Button></div>
       </div>
-      <NodeTestProgressLine progress={busy === "test-all" ? nodeTestProgress : null} />
+      <NodeTestProgressLine progress={nodeTestProgress} />
       <div className="node-settings-list">
         {customNodes.map((node) => (
           <div className={`node-setting-row ${!node.enabled ? "is-disabled" : ""}`} key={node.id}>
@@ -326,16 +329,31 @@ function Routes({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: string |
   );
 }
 
-function Downloads({ busy, run }: { busy: string | null; run: Runner }) {
+function Downloads({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: string | null; run: Runner }) {
   const [url, setUrl] = useState("");
   const [target, setTarget] = useState<DownloadTarget | null>(null);
+  const [attemptedNodeIds, setAttemptedNodeIds] = useState<string[]>([]);
+  const [lastAttemptFailed, setLastAttemptFailed] = useState(false);
+  const canRetry = snapshot.nodes.some((node) => node.enabled && ["available", "slow"].includes(node.health.status) && !attemptedNodeIds.includes(node.id));
   const download = async () => {
-    const next = await run("download-open", () => api.openDownload(url), "已通过节点在浏览器中打开地址");
-    setTarget(next);
+    try {
+      await run("download-open", async () => {
+        const next = await api.prepareDownload(url, attemptedNodeIds);
+        setTarget(next);
+        setAttemptedNodeIds((attempted) => [...attempted, next.nodeId]);
+        return api.openDownload(url, next.nodeId);
+      }, (next) => `已通过 ${next.nodeName} 在浏览器中打开地址`);
+      setLastAttemptFailed(false);
+    } catch (error) {
+      setLastAttemptFailed(true);
+      throw error;
+    }
   };
   const changeUrl = (value: string) => {
     setUrl(value);
     setTarget(null);
+    setAttemptedNodeIds([]);
+    setLastAttemptFailed(false);
   };
   return (
     <div className="page">
@@ -350,7 +368,7 @@ function Downloads({ busy, run }: { busy: string | null; run: Runner }) {
       </section>
       <section className="section-block">
         <div className="section-title"><div><h2>下载线路</h2><p>下载操作独立于 Git 路由清单。节点失败时不会静默改为 GitHub 直连。</p></div></div>
-        {target ? <dl className="download-target"><div><dt>目标</dt><dd>{target.fileName}</dd></div><div><dt>线路</dt><dd>GitHub 加速</dd></div></dl> : <div className="empty-state compact"><strong>等待 GitHub 地址</strong><p>支持 github.com 下的任意公开路径。</p></div>}
+        {target ? <><dl className="download-target"><div><dt>目标</dt><dd>{target.fileName}</dd></div><div><dt>线路</dt><dd>{target.nodeName}</dd></div></dl>{canRetry ? <div className="download-retry"><p>{lastAttemptFailed ? "当前线路未能获取此文件，可尝试下一条已检测可用线路。" : "需要时可改用下一条已检测可用线路。"}</p><Button busy={busy === "download-open"} onClick={() => download().catch(() => undefined)}>换线路重试</Button></div> : lastAttemptFailed ? <div className="download-retry"><p>没有其他已检测可用的下载线路。</p></div> : null}</> : <div className="empty-state compact"><strong>等待 GitHub 地址</strong><p>支持 github.com 下的任意公开路径。</p></div>}
       </section>
       <footer className="page-footnote">第三方节点可以看到公开仓库路径和文件名。GitBoost 不支持带凭据、Token、查询参数或片段的地址。</footer>
     </div>
@@ -431,7 +449,7 @@ function UsageLogs({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: strin
   );
 }
 
-function Settings({ snapshot, busy, nodeTestProgress, run, onImport }: { snapshot: AppSnapshot; busy: string | null; nodeTestProgress: NodeTestProgress | null; run: Runner; onImport: () => void }) {
+function Settings({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, onImport }: { snapshot: AppSnapshot; busy: string | null; nodeTestProgress: NodeTestProgress | null; nodeTestRunning: boolean; run: Runner; onImport: () => void }) {
   const [minutes, setMinutes] = useState(snapshot.settings.healthCheckMinutes);
   const [logLevel, setLogLevel] = useState(snapshot.settings.logLevel);
   const [launchAtLogin, setLaunchAtLogin] = useState(snapshot.settings.launchAtLogin);
@@ -450,7 +468,7 @@ function Settings({ snapshot, busy, nodeTestProgress, run, onImport }: { snapsho
         <div className="setting-row"><div><strong>登录时启动</strong><p>保持托盘运行，以便节点失效后重新选路。</p></div><Switch label="登录时启动" checked={launchAtLogin} onChange={(enabled) => setAutostart(enabled).catch(() => undefined)} /></div>
         <div className="setting-row"><div><strong>日志级别</strong><p>日志会移除凭据、查询参数和命令环境。</p></div><select value={logLevel} onChange={(event) => setLogLevel(event.target.value as "error" | "info" | "debug")}><option value="error">仅错误</option><option value="info">信息</option><option value="debug">调试</option></select></div>
       </section>
-      <CustomNodeSettings snapshot={snapshot} busy={busy} nodeTestProgress={nodeTestProgress} run={run} onImport={onImport} />
+      <CustomNodeSettings snapshot={snapshot} busy={busy} nodeTestProgress={nodeTestProgress} nodeTestRunning={nodeTestRunning} run={run} onImport={onImport} />
       <section className="section-block maintenance"><div className="section-title"><div><h2>数据与恢复</h2><p>恢复只清空 GitBoost 自己的重写规则，不修改仓库 remote。</p></div></div><div className="maintenance-actions"><Button busy={busy === "export"} onClick={() => saveNodes().catch(() => undefined)}>导出自定义节点</Button><Button busy={busy === "clear-logs"} onClick={() => run("clear-logs", api.clearLogs, "本地日志已清理").catch(() => undefined)}>清理日志</Button><Button tone="danger" busy={busy === "restore"} onClick={() => run("restore", api.restoreGitConfig, "GitBoost 配置已恢复为直连").catch(() => undefined)}>恢复 Git 配置</Button></div></section>
       <div className="about-line"><span>GitBoost 0.1.0 · macOS / Windows</span><span>本地运行 · 无账号 · 无遥测</span></div>
     </div>

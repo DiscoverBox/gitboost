@@ -31,6 +31,10 @@ where
         .map_err(|error| format!("节点检测任务异常结束：{error}"))?
 }
 
+fn emit_node_test_progress(app: &tauri::AppHandle, completed: usize, total: usize) {
+    let _ = app.emit("node-test-progress", NodeTestProgress { completed, total });
+}
+
 #[tauri::command]
 fn get_snapshot(core: State<'_, AppCore>) -> CommandResult<AppSnapshot> {
     core.snapshot()
@@ -61,9 +65,8 @@ async fn test_all_nodes(app: tauri::AppHandle) -> CommandResult<Vec<NodeEntry>> 
     let progress_app = app.clone();
     run_node_test(move || {
         app.state::<AppCore>()
-            .test_all_nodes_with_progress(|completed, total| {
-                let _ =
-                    progress_app.emit("node-test-progress", NodeTestProgress { completed, total });
+            .test_all_nodes_or_join_with_progress(|completed, total| {
+                emit_node_test_progress(&progress_app, completed, total);
             })
     })
     .await
@@ -71,7 +74,14 @@ async fn test_all_nodes(app: tauri::AppHandle) -> CommandResult<Vec<NodeEntry>> 
 
 #[tauri::command]
 async fn refresh_system_nodes(app: tauri::AppHandle) -> CommandResult<bool> {
-    run_node_test(move || app.state::<AppCore>().refresh_system_nodes()).await
+    let progress_app = app.clone();
+    run_node_test(move || {
+        app.state::<AppCore>()
+            .refresh_system_nodes_with_progress(|completed, total| {
+                emit_node_test_progress(&progress_app, completed, total);
+            })
+    })
+    .await
 }
 
 #[tauri::command]
@@ -172,16 +182,18 @@ fn set_usage_logging(core: State<'_, AppCore>, enabled: bool) -> CommandResult<A
 fn prepare_download(
     core: State<'_, AppCore>,
     original_url: String,
+    excluded_node_ids: Vec<String>,
 ) -> CommandResult<DownloadTarget> {
-    core.prepare_download(&original_url)
+    core.prepare_download_excluding(&original_url, &excluded_node_ids)
 }
 
 #[tauri::command]
 async fn open_download(
     core: State<'_, AppCore>,
     original_url: String,
+    node_id: String,
 ) -> CommandResult<DownloadTarget> {
-    let target = core.prepare_download(&original_url)?;
+    let target = core.prepare_download_with_node(&original_url, &node_id)?;
     tauri::async_runtime::spawn_blocking(move || downloads::probe_and_open(target))
         .await
         .map_err(|error| format!("下载探测任务异常结束：{error}"))?
@@ -272,7 +284,11 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
             "retest" => {
                 let handle = app.clone();
                 tauri::async_runtime::spawn_blocking(move || {
-                    let result = handle.state::<AppCore>().test_all_nodes();
+                    let result = handle
+                        .state::<AppCore>()
+                        .test_all_nodes_or_join_with_progress(|completed, total| {
+                            emit_node_test_progress(&handle, completed, total)
+                        });
                     match result {
                         Ok(_) => {
                             if let Ok(state) = handle.state::<AppCore>().snapshot() {
@@ -310,7 +326,13 @@ fn start_health_monitor(app: tauri::AppHandle) {
             last_check = Instant::now();
             let handle = app.clone();
             let _ = tauri::async_runtime::spawn_blocking(move || {
-                if handle.state::<AppCore>().test_all_nodes().is_ok() {
+                if handle
+                    .state::<AppCore>()
+                    .test_all_nodes_with_progress(|completed, total| {
+                        emit_node_test_progress(&handle, completed, total);
+                    })
+                    .is_ok()
+                {
                     if let Ok(state) = handle.state::<AppCore>().snapshot() {
                         let _ = handle.emit("snapshot-updated", state);
                     }
@@ -327,7 +349,9 @@ fn start_system_node_monitor(app: tauri::AppHandle) {
             let handle = app.clone();
             let _ = tauri::async_runtime::spawn_blocking(move || {
                 let core = handle.state::<AppCore>();
-                if let Err(error) = core.refresh_system_nodes() {
+                if let Err(error) = core.refresh_system_nodes_with_progress(|completed, total| {
+                    emit_node_test_progress(&handle, completed, total);
+                }) {
                     core.system_node_refresh_failed(&error);
                 }
                 if let Ok(state) = core.snapshot() {

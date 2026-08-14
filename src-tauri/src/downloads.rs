@@ -27,6 +27,7 @@ pub fn prepare_target(original_url: &str, node: &NodeDefinition) -> Result<Downl
         accelerated_url: format!("{}{suffix}", node.rewrite_base),
         original_url,
         file_name,
+        node_id: node.id.clone(),
         node_name: node.name.clone(),
     })
 }
@@ -125,10 +126,10 @@ fn probe(target: &DownloadTarget) -> Result<(), String> {
         .map_err(|error| format!("无法运行下载探测：{error}"))?;
     let summary = String::from_utf8_lossy(&output.stdout);
     let http_code = summary.trim();
-    if classify_probe(http_code, output.status.code()) {
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if classify_probe(http_code, output.status.code(), &stderr) {
         return Ok(());
     }
-    let stderr = String::from_utf8_lossy(&output.stderr);
     let detail = stderr
         .lines()
         .find(|line| !line.trim().is_empty())
@@ -154,9 +155,10 @@ fn null_device() -> &'static str {
     "/dev/null"
 }
 
-fn classify_probe(http_code: &str, exit_code: Option<i32>) -> bool {
-    // curl 63 means the declared or received body exceeded our 64 KiB probe cap.
-    matches!(http_code, "200" | "206") && matches!(exit_code, Some(0) | Some(63))
+fn classify_probe(http_code: &str, exit_code: Option<i32>, stderr: &str) -> bool {
+    let reached_probe_limit = stderr.contains("Exceeded the maximum allowed file size");
+    matches!(http_code, "200" | "206")
+        && (matches!(exit_code, Some(0) | Some(63)) || reached_probe_limit)
 }
 
 #[cfg(test)]
@@ -211,14 +213,30 @@ mod tests {
             target.accelerated_url,
             "https://fastgit.cc/https://github.com/ollama/ollama/releases/download/v1/tool.zip"
         );
+        assert_eq!(target.node_id, crate::models::FASTGIT_REWRITE_BASE);
         assert_eq!(target.node_name, "FastGit");
     }
 
     #[test]
     fn classifies_limited_probes_by_status() {
-        assert!(classify_probe("206", Some(0)));
-        assert!(classify_probe("200", Some(63)));
-        assert!(classify_probe("200", Some(0)));
-        assert!(!classify_probe("404", Some(22)));
+        assert!(classify_probe("206", Some(0), ""));
+        assert!(classify_probe("200", Some(63), ""));
+        assert!(classify_probe("200", Some(0), ""));
+        assert!(classify_probe(
+            "200",
+            Some(56),
+            "curl: (56) Exceeded the maximum allowed file size (65536) with 65536 bytes"
+        ));
+        assert!(!classify_probe(
+            "200",
+            Some(56),
+            "curl: (56) Failure when receiving data from the peer"
+        ));
+        assert!(!classify_probe(
+            "404",
+            Some(56),
+            "curl: (56) Exceeded the maximum allowed file size (65536) with 65536 bytes"
+        ));
+        assert!(!classify_probe("404", Some(22), ""));
     }
 }

@@ -92,6 +92,7 @@ export interface DownloadTarget {
   originalUrl: string;
   acceleratedUrl: string;
   fileName: string;
+  nodeId: string;
   nodeName: string;
 }
 

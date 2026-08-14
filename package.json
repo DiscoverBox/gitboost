@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:ui": "playwright test",
-    "test:integration": "cargo test --manifest-path src-tauri/Cargo.toml core_workflow_applies_verifies_persists_and_restores_git_routing -- --nocapture && playwright test --grep @integration",
+    "test:integration": "cargo test --manifest-path src-tauri/Cargo.toml core_workflow_applies_verifies_persists_and_restores_git_routing -- --ignored --nocapture",
     "test:all": "npm test && cargo test --manifest-path src-tauri/Cargo.toml && npm run test:ui",
     "build:windows": "tauri build --target x86_64-pc-windows-msvc",
     "tauri": "tauri"

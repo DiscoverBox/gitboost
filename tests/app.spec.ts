@@ -65,6 +65,60 @@ test("system node refresh reports whether the catalog changed", async ({ page })
   await expect(page.locator(".toast")).toHaveText("系统线路已是最新");
 });
 
+test("file download can retry with the next available line", async ({ page }) => {
+  await page.addInitScript(() => {
+    const nodes = [
+      { id: "node-one", name: "Node One", rewriteBase: "https://one.example/https://github.com/", enabled: true, builtIn: false, health: { status: "available", successCount: 2, attemptCount: 2, medianLatencyMs: 20, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } },
+      { id: "node-two", name: "Node Two", rewriteBase: "https://two.example/https://github.com/", enabled: true, builtIn: false, health: { status: "slow", successCount: 1, attemptCount: 1, medianLatencyMs: 80, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } },
+    ];
+    const snapshot = {
+      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: "node-one", healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
+      nodes,
+      routes: [],
+      environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
+    };
+    const calls: { command: string; args: Record<string, unknown> }[] = [];
+    const target = (node: typeof nodes[number]) => ({ originalUrl: "https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip", acceleratedUrl: `${node.rewriteBase}DiscoverBox/gitboost/archive/refs/heads/main.zip`, fileName: "main.zip", nodeId: node.id, nodeName: node.name });
+    Object.assign(window, {
+      __downloadCalls: calls,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, unknown> = {}) => {
+        if (command.startsWith("plugin:event|")) return undefined;
+        calls.push({ command, args });
+        if (command === "get_snapshot") return structuredClone(snapshot);
+        if (command === "prepare_download") {
+          const excluded = args.excludedNodeIds as string[];
+          return target(excluded.includes("node-one") ? nodes[1] : nodes[0]);
+        }
+        if (command === "open_download") {
+          if (args.nodeId === "node-one") throw new Error("Node One 无法获取此文件");
+          return target(nodes[1]);
+        }
+        return structuredClone(snapshot);
+      } },
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "文件下载", exact: true }).click();
+  await page.getByLabel("GitHub 地址").fill("https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip");
+  await page.getByRole("button", { name: "开始下载" }).click();
+
+  await expect(page.locator(".toast")).toHaveText("Node One 无法获取此文件");
+  await expect(page.locator(".download-target").getByText("Node One", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "换线路重试" }).click();
+  await expect(page.locator(".toast")).toHaveText("已通过 Node Two 在浏览器中打开地址");
+  await expect(page.locator(".download-target").getByText("Node Two", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "换线路重试" })).toHaveCount(0);
+
+  const calls = await page.evaluate(() => (window as typeof window & { __downloadCalls: { command: string; args: Record<string, unknown> }[] }).__downloadCalls);
+  expect(calls.filter(({ command }) => command === "prepare_download")).toEqual([
+    { command: "prepare_download", args: { originalUrl: "https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip", excludedNodeIds: [] } },
+    { command: "prepare_download", args: { originalUrl: "https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip", excludedNodeIds: ["node-one"] } },
+  ]);
+  expect(calls.filter(({ command }) => command === "open_download").map(({ args }) => args.nodeId)).toEqual(["node-one", "node-two"]);
+  expect(calls.some(({ command }) => command === "set_line_mode")).toBe(false);
+});
+
 test("full node detection shows determinate progress", async ({ page }) => {
   await page.addInitScript(() => {
     const snapshot = {
@@ -100,11 +154,22 @@ test("full node detection shows determinate progress", async ({ page }) => {
         },
       },
       completeNodeTest: () => completeNodeTest?.(),
+      emitNodeTestProgress: (completed: number, total: number) => {
+        listeners.get("node-test-progress")?.({ event: "node-test-progress", id: 1, payload: { completed, total } });
+      },
     });
   });
 
   await page.goto("/");
   const lineControl = page.locator(".section-title").filter({ has: page.getByRole("heading", { name: "线路控制" }) });
+
+  await page.evaluate(() => (window as typeof window & { emitNodeTestProgress: (completed: number, total: number) => void }).emitNodeTestProgress(3, 18));
+  await expect(lineControl.getByRole("button", { name: "检测中 3/18" })).toBeDisabled();
+  await expect(page.getByRole("progressbar", { name: "线路检测进度 3/18" })).toBeVisible();
+  await page.evaluate(() => (window as typeof window & { emitNodeTestProgress: (completed: number, total: number) => void }).emitNodeTestProgress(18, 18));
+  await expect(page.getByRole("progressbar")).toHaveCount(0);
+  await expect(lineControl.getByRole("button", { name: "重新测速" })).toBeEnabled();
+
   await lineControl.getByRole("button", { name: "重新测速" }).click();
 
   await expect(lineControl.getByRole("button", { name: "检测中 7/18" })).toBeDisabled();
@@ -119,7 +184,7 @@ test("full node detection shows determinate progress", async ({ page }) => {
   await expect(lineControl.getByRole("button", { name: "重新测速" })).toBeEnabled();
 });
 
-test("@integration core workflow preserves state across command boundaries", async ({ page }) => {
+test("core workflow UI responds to command results", async ({ page }) => {
   await page.addInitScript(() => {
     const snapshot = {
       settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null as string | null },

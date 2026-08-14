@@ -89,6 +89,6 @@ export const api = {
   clearLogs: () => call<AppSnapshot>("clear_logs"),
   getUsageLog: () => inTauri() ? call<UsageLogSnapshot>("get_usage_log") : Promise.resolve(structuredClone(browserUsageMock)),
   setUsageLogging: (enabled: boolean) => call<AppSnapshot>("set_usage_logging", { enabled }),
-  prepareDownload: (originalUrl: string) => call<DownloadTarget>("prepare_download", { originalUrl }),
-  openDownload: (originalUrl: string) => call<DownloadTarget>("open_download", { originalUrl }),
+  prepareDownload: (originalUrl: string, excludedNodeIds: string[]) => call<DownloadTarget>("prepare_download", { originalUrl, excludedNodeIds }),
+  openDownload: (originalUrl: string, nodeId: string) => call<DownloadTarget>("open_download", { originalUrl, nodeId }),
 };

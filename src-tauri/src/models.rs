@@ -187,6 +187,7 @@ pub struct DownloadTarget {
     pub original_url: String,
     pub accelerated_url: String,
     pub file_name: String,
+    pub node_id: String,
     pub node_name: String,
 }
 
