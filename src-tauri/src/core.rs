@@ -1926,6 +1926,13 @@ mod tests {
 
     #[test]
     fn removing_current_system_node_immediately_writes_direct_git_config() {
+        const MARKER: &str = "GITBOOST_REMOVE_CURRENT_SYSTEM_NODE_CHILD";
+        if rerun_with_isolated_git(
+            "core::tests::removing_current_system_node_immediately_writes_direct_git_config",
+            MARKER,
+        ) {
+            return;
+        }
         let directory = tempfile::tempdir().unwrap();
         let core = AppCore::new(directory.path().to_path_buf()).unwrap();
         let settings = Settings {
@@ -1972,6 +1979,13 @@ mod tests {
 
     #[test]
     fn catalog_refresh_resumes_acceleration_after_testing_replacement_nodes() {
+        const MARKER: &str = "GITBOOST_CATALOG_REFRESH_RESUME_CHILD";
+        if rerun_with_isolated_git(
+            "core::tests::catalog_refresh_resumes_acceleration_after_testing_replacement_nodes",
+            MARKER,
+        ) {
+            return;
+        }
         let directory = tempfile::tempdir().unwrap();
         let core = AppCore::new(directory.path().to_path_buf()).unwrap();
         let settings = Settings {
