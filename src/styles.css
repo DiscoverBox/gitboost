@@ -45,7 +45,8 @@ code { font-family: "SFMono-Regular", Menlo, monospace; font-size: 0.88em; }
 .line-glyph span:nth-child(1) { left: 1px; }.line-glyph span:nth-child(2) { left: 14px; }.line-glyph span:nth-child(3) { right: 0; }
 .line-glyph[data-on="true"]::before { background: var(--accent); }.line-glyph[data-on="true"] span { border-color: var(--accent); background: var(--accent); }
 
-.main-content { min-width: 0; overflow: auto; padding-top: 29px; }
+.main-content { min-width: 0; overflow: auto; padding-top: 29px; scrollbar-width: none; }
+.main-content::-webkit-scrollbar { display: none; }
 .app-shell--native-titlebar .main-content { padding-top: 0; }
 .page { width: min(1020px, 100%); min-height: 100%; padding: 42px 54px 46px; }
 .page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; margin-bottom: 32px; }

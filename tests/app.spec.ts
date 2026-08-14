@@ -41,6 +41,21 @@ test("core desktop workflow is navigable", async ({ page }) => {
   expect(errors).toEqual([]);
 });
 
+test("settings remain scrollable without showing a scrollbar", async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 760 });
+  await page.goto("/");
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+
+  const content = page.locator(".main-content");
+  await expect(content).toBeVisible();
+  expect(await content.evaluate((element) => element.scrollHeight)).toBeGreaterThan(
+    await content.evaluate((element) => element.clientHeight),
+  );
+  await expect(content).toHaveCSS("scrollbar-width", "none");
+  await content.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+  await expect(page.locator(".about-line")).toBeInViewport();
+});
+
 test("system node refresh reports whether the catalog changed", async ({ page }) => {
   await page.addInitScript(() => {
     const snapshot: AppSnapshot = {

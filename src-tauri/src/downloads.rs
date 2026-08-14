@@ -61,13 +61,6 @@ fn browser_command(url: &str) -> Command {
     command
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
-fn browser_command(url: &str) -> Command {
-    let mut command = Command::new("xdg-open");
-    command.arg(url);
-    command
-}
-
 fn normalize_github_url(input: &str) -> Result<(String, String), String> {
     let trimmed = input.trim();
     if trimmed.len() > 4_096 {

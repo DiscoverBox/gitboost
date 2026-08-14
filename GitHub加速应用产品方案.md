@@ -66,7 +66,7 @@ git push
 
 ### 3.1 必须实现
 
-- Windows、macOS、Linux 桌面应用。
+- Windows、macOS 桌面应用。
 - 检测系统 Git 是否可用。
 - 批量粘贴外部节点。
 - 导入本地节点 JSON 文件。
@@ -80,7 +80,7 @@ git push
 - 公开仓库加速清单管理。
 - Git 配置冲突、显式 `pushurl` 和带凭据 URL 的诊断。
 - 配置备份、幂等恢复、诊断信息导出。
-- 单元测试、集成测试和三平台端到端测试。
+- 单元测试、集成测试和双平台端到端测试。
 
 ### 3.2 明确不实现
 
@@ -453,7 +453,6 @@ GitBoost/
 
 - Windows：Git for Windows 下的 PowerShell、CMD、Git Bash 通过测试。
 - macOS：Apple Silicon 和 Intel 至少完成构建验证，Apple Silicon 完成真实端到端测试。
-- Linux：主流发行版完成 AppImage 与系统 Git 测试。
 - VS Code、JetBrains 仅在明确使用系统 Git 时标记“已验证”。
 - GitHub Desktop、JGit、libgit2 等不得未经实测标记为支持。
 - 浅克隆、submodule、重定向、TLS 错误、超时和已有重写冲突均有回归用例。
@@ -468,7 +467,7 @@ GitBoost/
 | B：节点能力 | 导入器、JSON 状态、真实 `ls-remote` 测试和选路 | 错误分类、超时、去重、排序、原子写入全部通过 |
 | C：桌面 MVP | Tauri 托盘、首页、节点、路由清单、诊断、设置 | 首次导入到正常 clone 的完整用户路径可用 |
 | D：可靠性 | 冲突处理、回滚、脱敏日志、卸载清理 | 故障注入和重复操作测试通过 |
-| E：跨平台交付 | Windows、macOS、Linux 安装包与 CI | 三平台核心端到端矩阵通过并产出可安装包 |
+| E：跨平台交付 | Windows、macOS 安装包与 CI | 双平台核心端到端矩阵通过并产出可安装包 |
 
 AI 可以并行生成 UI、Rust 模块和平台构建配置，但合并顺序仍以核心行为测试为门槛，不能以“代码已生成”代替“真实 Git 行为已验证”。
 
@@ -522,7 +521,7 @@ AI 可以并行生成 UI、Rust 模块和平台构建配置，但合并顺序仍
 
 立项前没有新的架构阻塞，但正式发布前仍必须完成：
 
-1. Windows、macOS、Linux 的真实 Git 配置和路径兼容测试。
+1. Windows、macOS 的真实 Git 配置和路径兼容测试。
 2. 对实际导入节点验证 Smart HTTP、重定向和 TLS 行为。
 3. VS Code、JetBrains、GitHub Desktop 的逐项兼容测试，不能只凭推断标记支持。
 4. 验证不同 Git 版本对同地址 `pushInsteadOf`、缺失 include 和重复规则的行为。
