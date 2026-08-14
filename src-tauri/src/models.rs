@@ -129,6 +129,13 @@ pub struct NodeEntry {
     pub health: HealthSummary,
 }
 
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NodeTestProgress {
+    pub completed: usize,
+    pub total: usize,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RouteEntry {

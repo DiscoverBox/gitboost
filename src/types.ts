@@ -36,6 +36,11 @@ export interface NodeEntry {
   health: HealthSummary;
 }
 
+export interface NodeTestProgress {
+  completed: number;
+  total: number;
+}
+
 export interface RouteEntry {
   id: string;
   repositoryUrl: string;

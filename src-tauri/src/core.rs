@@ -173,7 +173,7 @@ impl AppCore {
         let Some(_run) = self.acquire_full_node_test(wait) else {
             return update.map(|update| update.changed);
         };
-        let tested = self.test_all_nodes_locked();
+        let tested = self.test_all_nodes_locked(&|_, _| {});
         let update = update?;
         tested?;
         if let Some(applied_at) = update.recovery_applied_at.as_ref() {
@@ -453,21 +453,31 @@ impl AppCore {
     }
 
     pub fn test_all_nodes(&self) -> Result<Vec<NodeEntry>, String> {
+        self.test_all_nodes_with_progress(|_, _| {})
+    }
+
+    pub fn test_all_nodes_with_progress<F>(&self, on_progress: F) -> Result<Vec<NodeEntry>, String>
+    where
+        F: Fn(usize, usize) + Sync,
+    {
         let _run = self
             .full_node_test_lock
             .try_lock()
             .ok_or_else(|| "全量线路检测正在进行，请稍后再试".to_string())?;
-        self.test_all_nodes_locked()
+        self.test_all_nodes_locked(&on_progress)
     }
 
-    fn test_all_nodes_locked(&self) -> Result<Vec<NodeEntry>, String> {
+    fn test_all_nodes_locked<F>(&self, on_progress: &F) -> Result<Vec<NodeEntry>, String>
+    where
+        F: Fn(usize, usize) + Sync,
+    {
         let nodes: Vec<NodeDefinition> = self
             .nodes()?
             .into_iter()
             .filter(|node| node.enabled)
             .collect();
         let old_health = self.health()?;
-        let tested = test_nodes_bounded(&nodes, &old_health, git::test_node)?;
+        let tested = test_nodes_bounded(&nodes, &old_health, git::test_node, on_progress)?;
         let _guard = self.lock.lock();
         let mut next_health = self.health()?;
         for (node_id, summary) in tested {
@@ -1101,18 +1111,23 @@ fn test_nodes_bounded<F>(
     nodes: &[NodeDefinition],
     old_health: &HashMap<String, HealthSummary>,
     test: F,
+    on_progress: impl Fn(usize, usize) + Sync,
 ) -> Result<Vec<(String, HealthSummary)>, String>
 where
     F: Fn(&NodeDefinition, &HealthSummary) -> HealthSummary + Sync,
 {
     let next = AtomicUsize::new(0);
+    let completed = AtomicUsize::new(0);
     let tested = Mutex::new(Vec::with_capacity(nodes.len()));
+    on_progress(0, nodes.len());
     std::thread::scope(|scope| {
         let handles: Vec<_> = (0..NODE_TEST_CONCURRENCY.min(nodes.len()))
             .map(|_| {
                 let next = &next;
+                let completed = &completed;
                 let tested = &tested;
                 let test = &test;
+                let on_progress = &on_progress;
                 scope.spawn(move || loop {
                     let index = next.fetch_add(1, Ordering::Relaxed);
                     let Some(node) = nodes.get(index) else {
@@ -1121,6 +1136,7 @@ where
                     let previous = old_health.get(&node.id).cloned().unwrap_or_default();
                     let summary = test(node, &previous);
                     tested.lock().push((index, node.id.clone(), summary));
+                    on_progress(completed.fetch_add(1, Ordering::Relaxed) + 1, nodes.len());
                 })
             })
             .collect();
@@ -1487,17 +1503,29 @@ mod tests {
         let active = AtomicUsize::new(0);
         let maximum = AtomicUsize::new(0);
 
-        let tested = test_nodes_bounded(&nodes, &HashMap::new(), |_, _| {
-            let running = active.fetch_add(1, Ordering::SeqCst) + 1;
-            maximum.fetch_max(running, Ordering::SeqCst);
-            std::thread::sleep(Duration::from_millis(30));
-            active.fetch_sub(1, Ordering::SeqCst);
-            HealthSummary::default()
-        })
+        let progress = Mutex::new(Vec::new());
+        let tested = test_nodes_bounded(
+            &nodes,
+            &HashMap::new(),
+            |_, _| {
+                let running = active.fetch_add(1, Ordering::SeqCst) + 1;
+                maximum.fetch_max(running, Ordering::SeqCst);
+                std::thread::sleep(Duration::from_millis(30));
+                active.fetch_sub(1, Ordering::SeqCst);
+                HealthSummary::default()
+            },
+            |completed, total| progress.lock().push((completed, total)),
+        )
         .unwrap();
 
         assert_eq!(tested.len(), 8);
         assert_eq!(maximum.load(Ordering::SeqCst), NODE_TEST_CONCURRENCY);
+        let mut progress = progress.into_inner();
+        progress.sort_unstable();
+        assert_eq!(
+            progress,
+            (0..=8).map(|completed| (completed, 8)).collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -1589,5 +1617,176 @@ mod tests {
         );
         assert!(report.explicit_push_url.is_none());
         assert!(report.report_text.contains("显式 pushurl: 检查失败"));
+    }
+
+    #[test]
+    fn core_workflow_applies_verifies_persists_and_restores_git_routing() {
+        const CHILD_MARKER: &str = "GITBOOST_CORE_WORKFLOW_CHILD";
+        if std::env::var_os(CHILD_MARKER).is_none() {
+            let sandbox = tempfile::tempdir().unwrap();
+            let home = sandbox.path().join("home");
+            fs::create_dir(&home).unwrap();
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "core::tests::core_workflow_applies_verifies_persists_and_restores_git_routing",
+                    "--nocapture",
+                ])
+                .env(CHILD_MARKER, "1")
+                .env("GIT_CONFIG_GLOBAL", sandbox.path().join("global.gitconfig"))
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("HOME", home)
+                .status()
+                .unwrap();
+            assert!(status.success(), "isolated core workflow failed");
+            return;
+        }
+
+        fn git(repository: &Path, arguments: &[&str]) -> String {
+            let output = std::process::Command::new("git")
+                .args(arguments)
+                .current_dir(repository)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {arguments:?} failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            String::from_utf8_lossy(&output.stdout).trim().to_string()
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("app-data");
+        let core = AppCore::new(root.clone()).unwrap();
+
+        let imported = core.import_nodes("https://proxy.integration.test").unwrap();
+        assert_eq!(imported.imported, 1);
+        let node = imported
+            .nodes
+            .iter()
+            .find(|node| !node.node.built_in)
+            .unwrap();
+        let node_id = node.node.id.clone();
+        let rewrite_base = node.node.rewrite_base.clone();
+        let mut health = core.health().unwrap();
+        health.insert(
+            node_id.clone(),
+            HealthSummary {
+                status: NodeStatus::Available,
+                success_count: 2,
+                attempt_count: 2,
+                median_latency_ms: Some(25),
+                checked_at: Some(Utc::now()),
+                ..HealthSummary::default()
+            },
+        );
+        atomic_write_json(&core.paths.health, &health).unwrap();
+
+        core.add_route("openai/codex").unwrap();
+        let enabled = core.set_acceleration(true).unwrap();
+        assert!(enabled.settings.acceleration_enabled);
+        assert_eq!(
+            enabled.settings.current_node_id.as_deref(),
+            Some(node_id.as_str())
+        );
+        assert!(enabled.environment.include_registered);
+
+        let repository = tempfile::tempdir().unwrap();
+        git(repository.path(), &["init", "-q"]);
+        git(
+            repository.path(),
+            &[
+                "remote",
+                "add",
+                "origin",
+                "https://github.com/openai/codex.git",
+            ],
+        );
+        git(
+            repository.path(),
+            &[
+                "remote",
+                "add",
+                "unlisted",
+                "https://github.com/octocat/Hello-World.git",
+            ],
+        );
+        assert_eq!(
+            git(repository.path(), &["remote", "get-url", "origin"]),
+            format!("{rewrite_base}openai/codex.git")
+        );
+        assert_eq!(
+            git(
+                repository.path(),
+                &["remote", "get-url", "--push", "origin"]
+            ),
+            "https://github.com/openai/codex.git"
+        );
+        assert_eq!(
+            git(repository.path(), &["remote", "get-url", "unlisted"]),
+            "https://github.com/octocat/Hello-World.git"
+        );
+
+        drop(core);
+        let core = AppCore::new(root).unwrap();
+        core.refresh_registered_configuration().unwrap();
+        let restarted = core.snapshot().unwrap();
+        assert!(restarted.settings.acceleration_enabled);
+        assert!(restarted.environment.include_registered);
+        assert_eq!(
+            git(repository.path(), &["remote", "get-url", "origin"]),
+            format!("{rewrite_base}openai/codex.git")
+        );
+
+        git(
+            repository.path(),
+            &[
+                "config",
+                "remote.origin.pushurl",
+                "https://user:secret@github.com/openai/codex.git?token=hidden",
+            ],
+        );
+        let report = core.diagnostics(Some(repository.path())).unwrap();
+        assert_eq!(
+            report.fetch_url.as_deref(),
+            Some(format!("{rewrite_base}openai/codex.git").as_str())
+        );
+        let explicit_push_url = report.explicit_push_url.as_deref().unwrap();
+        assert!(explicit_push_url.contains("redacted"));
+        assert!(!report.report_text.contains("secret"));
+        assert!(!report.report_text.contains("hidden"));
+
+        core.record_usage(CompletedTrace {
+            occurred_at: Utc::now(),
+            command: "fetch".into(),
+            original_url: Some(
+                "https://user:secret@github.com/openai/codex.git?token=hidden".into(),
+            ),
+            effective_url: format!("{rewrite_base}openai/codex.git"),
+            exit_code: 0,
+            duration_ms: 42,
+        })
+        .unwrap();
+        let usage = core.usage_log().unwrap();
+        assert_eq!(usage.events.len(), 1);
+        assert_eq!(usage.events[0].route, UsageRoute::Accelerated);
+        assert_eq!(
+            usage.events[0].repository,
+            "https://github.com/openai/codex.git"
+        );
+        let stored_usage =
+            fs::read_to_string(directory.path().join("app-data/logs/usage.jsonl")).unwrap();
+        assert!(!stored_usage.contains("secret"));
+        assert!(!stored_usage.contains("hidden"));
+
+        let restored = core.restore_git_config().unwrap();
+        assert!(!restored.settings.acceleration_enabled);
+        assert_eq!(restored.settings.line_mode, LineMode::Direct);
+        assert!(!restored.environment.include_registered);
+        assert_eq!(
+            git(repository.path(), &["remote", "get-url", "origin"]),
+            "https://github.com/openai/codex.git"
+        );
     }
 }

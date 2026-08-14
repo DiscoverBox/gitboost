@@ -58,7 +58,15 @@ async fn test_node(app: tauri::AppHandle, node_id: String) -> CommandResult<Node
 
 #[tauri::command]
 async fn test_all_nodes(app: tauri::AppHandle) -> CommandResult<Vec<NodeEntry>> {
-    run_node_test(move || app.state::<AppCore>().test_all_nodes()).await
+    let progress_app = app.clone();
+    run_node_test(move || {
+        app.state::<AppCore>()
+            .test_all_nodes_with_progress(|completed, total| {
+                let _ =
+                    progress_app.emit("node-test-progress", NodeTestProgress { completed, total });
+            })
+    })
+    .await
 }
 
 #[tauri::command]

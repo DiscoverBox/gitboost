@@ -64,6 +64,146 @@ test("system node refresh reports whether the catalog changed", async ({ page })
   await expect(page.locator(".toast")).toHaveText("系统线路已是最新");
 });
 
+test("full node detection shows determinate progress", async ({ page }) => {
+  await page.addInitScript(() => {
+    const snapshot = {
+      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
+      nodes: [{ id: "system", name: "system", rewriteBase: "https://proxy.example/https://github.com/", enabled: true, builtIn: true, health: { status: "untested", successCount: 0, attemptCount: 0, medianLatencyMs: null, consecutiveFailures: 0, checkedAt: null, failureReason: null } }],
+      routes: [],
+      environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
+    };
+    const callbacks = new Map<number, (event: unknown) => void>();
+    const listeners = new Map<string, (event: unknown) => void>();
+    let callbackId = 0;
+    let completeNodeTest: (() => void) | undefined;
+    Object.assign(window, {
+      __TAURI_EVENT_PLUGIN_INTERNALS__: { unregisterListener: () => undefined },
+      __TAURI_INTERNALS__: {
+        transformCallback: (callback: (event: unknown) => void) => {
+          const id = ++callbackId;
+          callbacks.set(id, callback);
+          return id;
+        },
+        unregisterCallback: (id: number) => callbacks.delete(id),
+        invoke: async (command: string, args: Record<string, unknown>) => {
+          if (command === "plugin:event|listen") {
+            listeners.set(String(args.event), callbacks.get(Number(args.handler))!);
+            return callbackId;
+          }
+          if (command === "plugin:event|unlisten") return undefined;
+          if (command === "test_all_nodes") {
+            listeners.get("node-test-progress")?.({ event: "node-test-progress", id: 1, payload: { completed: 7, total: 18 } });
+            return new Promise((resolve) => { completeNodeTest = () => resolve(snapshot.nodes); });
+          }
+          return snapshot;
+        },
+      },
+      completeNodeTest: () => completeNodeTest?.(),
+    });
+  });
+
+  await page.goto("/");
+  const lineControl = page.locator(".section-title").filter({ has: page.getByRole("heading", { name: "线路控制" }) });
+  await lineControl.getByRole("button", { name: "重新测速" }).click();
+
+  await expect(lineControl.getByRole("button", { name: "检测中 7/18" })).toBeDisabled();
+  const progress = page.getByRole("progressbar", { name: "线路检测进度 7/18" });
+  await expect(progress).toHaveAttribute("aria-valuenow", "7");
+  const fillRatio = await progress.locator("span").evaluate((fill) => fill.clientWidth / fill.parentElement!.clientWidth);
+  expect(fillRatio).toBeCloseTo(7 / 18, 2);
+
+  await page.evaluate(() => (window as typeof window & { completeNodeTest: () => void }).completeNodeTest());
+  await expect(page.locator(".toast")).toHaveText("节点检测完成");
+  await expect(page.getByRole("progressbar")).toHaveCount(0);
+  await expect(lineControl.getByRole("button", { name: "重新测速" })).toBeEnabled();
+});
+
+test("@integration core workflow preserves state across command boundaries", async ({ page }) => {
+  await page.addInitScript(() => {
+    const snapshot = {
+      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null as string | null },
+      nodes: [{ id: "verified-node", name: "Verified Node", rewriteBase: "https://proxy.integration.test/https://github.com/", enabled: true, builtIn: false, health: { status: "available", successCount: 2, attemptCount: 2, medianLatencyMs: 25, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } }],
+      routes: [] as { id: string; repositoryUrl: string; createdAt: string }[],
+      environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
+    };
+    const calls: { command: string; args: Record<string, unknown> }[] = [];
+    const copy = () => structuredClone(snapshot);
+    Object.assign(window, {
+      __workflowCalls: calls,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, unknown> = {}) => {
+        if (command.startsWith("plugin:event|")) return undefined;
+        calls.push({ command, args });
+        if (command === "get_snapshot") return copy();
+        if (command === "add_route") {
+          const repository = String(args.repositoryUrl).replace(/\.git$/, "");
+          const repositoryUrl = `${repository.startsWith("https://github.com/") ? repository : `https://github.com/${repository}`}.git`;
+          snapshot.routes.push({ id: "route-1", repositoryUrl, createdAt: "2026-08-14T00:00:00Z" });
+          return copy();
+        }
+        if (command === "set_acceleration") {
+          if (args.enabled && snapshot.routes.length === 0) throw new Error("仅加速清单为空，请先加入至少一个公开仓库");
+          snapshot.settings.accelerationEnabled = Boolean(args.enabled);
+          snapshot.settings.lineMode = args.enabled ? "automatic" : snapshot.settings.lineMode;
+          snapshot.settings.currentNodeId = args.enabled ? "verified-node" : null;
+          snapshot.settings.lastAppliedAt = "2026-08-14T00:00:01Z";
+          snapshot.environment.includeRegistered = true;
+          return copy();
+        }
+        if (command === "set_line_mode") {
+          snapshot.settings.lineMode = String(args.mode) as "automatic" | "direct";
+          if (args.mode === "direct") {
+            snapshot.settings.accelerationEnabled = false;
+            snapshot.settings.currentNodeId = null;
+          }
+          return copy();
+        }
+        if (command === "restore_git_config") {
+          snapshot.settings.accelerationEnabled = false;
+          snapshot.settings.lineMode = "direct";
+          snapshot.settings.currentNodeId = null;
+          snapshot.environment.includeRegistered = false;
+          return copy();
+        }
+        return copy();
+      } },
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "开启加速" }).click();
+  await expect(page.locator(".toast")).toHaveText("仅加速清单为空，请先加入至少一个公开仓库");
+  await expect(page.getByRole("heading", { name: "使用 GitHub 原地址，按需加速" })).toBeVisible();
+
+  await page.getByRole("button", { name: "路由清单", exact: true }).click();
+  await page.getByRole("textbox", { name: "GitHub 仓库" }).fill("openai/codex");
+  await page.getByRole("button", { name: "加入清单" }).click();
+  await expect(page.getByText("https://github.com/openai/codex.git", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "总览", exact: true }).click();
+  await page.getByRole("button", { name: "开启加速" }).click();
+  await expect(page.getByRole("heading", { name: "读取线路已接入" })).toBeVisible();
+  await expect(page.getByText("独立配置已注册", { exact: true })).toBeVisible();
+  await expect(page.getByText("加速已开启", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "直连", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "使用 GitHub 原地址，按需加速" })).toBeVisible();
+  await expect(page.getByText("当前为直连", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("button", { name: "恢复 Git 配置" }).click();
+  await expect(page.locator(".toast")).toHaveText("GitBoost 配置已恢复为直连");
+
+  const calls = await page.evaluate(() => (window as typeof window & { __workflowCalls: { command: string; args: Record<string, unknown> }[] }).__workflowCalls);
+  expect(calls.filter(({ command }) => command === "get_snapshot").length).toBeGreaterThan(0);
+  expect(calls.filter(({ command }) => ["set_acceleration", "add_route", "set_line_mode", "restore_git_config"].includes(command))).toEqual([
+    { command: "set_acceleration", args: { enabled: true } },
+    { command: "add_route", args: { repositoryUrl: "openai/codex" } },
+    { command: "set_acceleration", args: { enabled: true } },
+    { command: "set_line_mode", args: { mode: "direct", nodeId: null } },
+    { command: "restore_git_config", args: {} },
+  ]);
+});
+
 test("uses the bright interface palette", async ({ page }) => {
   await page.goto("/");
 

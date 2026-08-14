@@ -32,6 +32,18 @@ npm run test:ui
 npm run tauri dev
 ```
 
+核心链路自我验证使用隔离的临时 Git 全局配置，串联验证节点、路由、配置注册、Git 实际地址解析、持久化、诊断脱敏、使用日志和恢复直连，不会修改开发机的 `~/.gitconfig`：
+
+```bash
+npm run test:integration
+```
+
+提交前运行全部前端单元测试、Rust 测试和桌面界面测试：
+
+```bash
+npm run test:all
+```
+
 Rust 单元测试：
 
 ```bash
