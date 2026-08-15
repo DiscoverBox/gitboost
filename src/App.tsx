@@ -16,6 +16,22 @@ const navItems: { key: PageKey; label: string }[] = [
 ];
 const usesNativeTitleBar = navigator.userAgent.includes("Windows");
 
+function BrandLogo() {
+  return (
+    <div className="brand-lockup" aria-label="GitBoost">
+      <svg className="brand-mark" viewBox="0 0 40 40" aria-hidden="true">
+        <rect width="40" height="40" rx="12" />
+        <path d="M9 11h7c5 0 8 3 8 8v1c0 4 3 7 7 7h2" />
+        <path d="M9 20h7c5 0 8 3 8 8" />
+        <circle cx="9" cy="11" r="2" />
+        <circle cx="9" cy="20" r="2" />
+        <path d="m29 23 4 4-4 4" />
+      </svg>
+      <span className="wordmark">GitBoost</span>
+    </div>
+  );
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -137,15 +153,15 @@ export default function App() {
     }
   }, [reload]);
 
-  if (!snapshot) return <div className="splash"><div className="wordmark">GitBoost</div><p>正在读取 Git 环境…</p></div>;
+  if (!snapshot) return <div className="splash"><BrandLogo /><p>正在读取 Git 环境…</p></div>;
 
   return (
     <div className={`app-shell ${usesNativeTitleBar ? "app-shell--native-titlebar" : ""}`}>
       {!usesNativeTitleBar && <div className="window-drag" data-tauri-drag-region />}
       <aside className="sidebar">
         <div className="brand-block">
-          <div className="wordmark">GitBoost</div>
-          <span>GitHub 读取线路</span>
+          <BrandLogo />
+          <span className="brand-tagline">GitHub 读取加速</span>
         </div>
         <nav aria-label="主要导航">
           {navItems.map((item) => <button key={item.key} className={page === item.key ? "is-active" : ""} onClick={() => setPage(item.key)}>{item.label}</button>)}

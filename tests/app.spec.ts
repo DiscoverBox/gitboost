@@ -311,14 +311,16 @@ test("uses the bright interface palette", async ({ page }) => {
   });
 
   expect(palette).toEqual({
-    canvas: "#f6fbff",
-    sidebar: "#eaf6ff",
+    canvas: "#ffffff",
+    sidebar: "#e4f4ff",
     surface: "#ffffff",
     accent: "#1377cc",
   });
   await expect(page.locator(".status-board")).toHaveCSS("background-color", "rgb(255, 255, 255)");
-  await expect(page.locator(".status-primary")).toHaveCSS("background-color", "rgb(240, 248, 255)");
-  await expect(page.getByRole("navigation", { name: "主要导航" }).getByRole("button", { name: "总览" })).toHaveCSS("color", "rgb(13, 101, 182)");
+  await expect(page.locator(".status-primary")).toHaveCSS("background-color", "rgb(19, 119, 204)");
+  await expect(page.locator(".brand-mark").first()).toBeVisible();
+  await expect(page.getByRole("navigation", { name: "主要导航" }).getByRole("button", { name: "总览" })).toHaveCSS("background-color", "rgb(19, 119, 204)");
+  await expect(page.getByRole("navigation", { name: "主要导航" }).getByRole("button", { name: "总览" })).toHaveCSS("color", "rgb(255, 255, 255)");
 });
 
 test("node import keeps failures open and reports actual results", async ({ page }) => {

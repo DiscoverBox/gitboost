@@ -1,11 +1,11 @@
 :root {
   font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", sans-serif;
   color: #17324d;
-  background: #f6fbff;
+  background: #ffffff;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
-  --canvas: #f6fbff;
-  --sidebar: #eaf6ff;
+  --canvas: #ffffff;
+  --sidebar: #e4f4ff;
   --surface: #ffffff;
   --surface-soft: #f1f8fe;
   --ink: #17324d;
@@ -30,17 +30,22 @@ input, textarea { caret-color: var(--accent); }
 ::selection { background: #cce9ff; color: var(--ink); }
 code { font-family: "SFMono-Regular", Menlo, monospace; font-size: 0.88em; }
 
-.app-shell { position: relative; display: grid; grid-template-columns: 214px minmax(0, 1fr); height: 100%; background: var(--canvas); }
+.app-shell { position: relative; display: grid; grid-template-columns: 228px minmax(0, 1fr); height: 100%; background: var(--canvas); }
 .window-drag { position: absolute; z-index: 20; top: 0; right: 0; left: 0; height: 29px; }
-.sidebar { display: flex; flex-direction: column; min-width: 0; padding: 54px 12px 18px; background: var(--sidebar); border-right: 1px solid #cfe5f4; }
+.sidebar { display: flex; flex-direction: column; min-width: 0; padding: 54px 14px 18px; background: var(--sidebar); border-right: 1px solid #c7e4f7; }
 .app-shell--native-titlebar .sidebar { padding-top: 25px; }
-.brand-block { padding: 0 14px 26px; }
-.wordmark { color: var(--accent-strong); font-family: "Avenir Next", ui-rounded, sans-serif; font-size: 22px; font-weight: 700; letter-spacing: -0.025em; }
-.brand-block span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; letter-spacing: 0.04em; }
-.sidebar nav { display: grid; gap: 2px; }
-.sidebar nav button { width: 100%; padding: 8px 14px; border: 0; border-radius: 8px; background: transparent; color: #385a74; text-align: left; font-size: 13px; cursor: pointer; transition: background 120ms ease, color 120ms ease; }
-.sidebar nav button:hover { background: rgb(255 255 255 / 76%); color: var(--accent-strong); }
-.sidebar nav button.is-active { background: white; color: var(--accent-strong); font-weight: 600; box-shadow: 0 4px 14px rgb(44 117 170 / 11%); }
+.brand-block { padding: 0 10px 29px; }
+.brand-lockup { display: flex; align-items: center; gap: 10px; }
+.brand-mark { flex: none; width: 34px; height: 34px; overflow: visible; }
+.brand-mark rect { fill: var(--accent); }
+.brand-mark path { fill: none; stroke: white; stroke-width: 2.15; stroke-linecap: round; stroke-linejoin: round; }
+.brand-mark circle { fill: #a9e5ff; stroke: white; stroke-width: 1.2; }
+.wordmark { color: var(--accent-strong); font-family: "Avenir Next", ui-rounded, sans-serif; font-size: 21px; font-weight: 700; letter-spacing: -0.025em; }
+.brand-tagline { display: block; margin: 7px 0 0 44px; color: #4d7088; font-size: 10px; letter-spacing: 0.06em; }
+.sidebar nav { display: grid; gap: 4px; }
+.sidebar nav button { width: 100%; padding: 9px 13px; border: 0; border-radius: 9px; background: transparent; color: #365a74; text-align: left; font-size: 13px; cursor: pointer; transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease; }
+.sidebar nav button:hover { background: #d3ecfc; color: var(--accent-strong); }
+.sidebar nav button.is-active { background: var(--accent); color: white; font-weight: 650; box-shadow: 0 7px 18px rgb(19 119 204 / 23%); }
 .sidebar-status { display: grid; grid-template-columns: 38px 1fr; align-items: center; gap: 9px; margin: auto 7px 0; padding: 13px 8px; border-top: 1px solid #cce2f1; }
 .sidebar-status strong, .sidebar-status small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-status strong { font-size: 11px; font-weight: 650; }
@@ -57,7 +62,7 @@ code { font-family: "SFMono-Regular", Menlo, monospace; font-size: 0.88em; }
 .page { width: min(1020px, 100%); min-height: 100%; padding: 42px 54px 46px; }
 .page-header { display: flex; align-items: flex-end; justify-content: space-between; gap: 28px; margin-bottom: 32px; }
 .page-header > div:first-child { min-width: 0; max-width: 690px; }
-.eyebrow { margin: 0 0 8px; color: var(--accent); font-size: 10px; font-weight: 700; letter-spacing: 0.13em; text-transform: uppercase; }
+.eyebrow { display: none; }
 .page-header h1 { margin: 0; font-family: "Avenir Next", ui-rounded, sans-serif; font-size: clamp(26px, 3vw, 35px); font-weight: 650; letter-spacing: -0.035em; line-height: 1.12; text-wrap: pretty; }
 .page-description { max-width: 660px; margin: 9px 0 0; color: var(--muted); font-size: 13px; line-height: 1.55; text-wrap: pretty; }
 .page-actions { display: flex; flex: none; gap: 8px; }
@@ -69,14 +74,14 @@ code { font-family: "SFMono-Regular", Menlo, monospace; font-size: 0.88em; }
 .button--danger { border-color: color-mix(in srgb, var(--danger), transparent 55%); color: var(--danger); }.button--danger:hover:not(:disabled) { border-color: var(--danger); background: #fff8f8; }
 .button--quiet { min-height: auto; padding: 2px 3px; border: 0; background: transparent; box-shadow: none; color: var(--accent); }.button--quiet:hover:not(:disabled) { background: transparent; text-decoration: underline; text-underline-offset: 3px; }
 
-.status-board { display: grid; grid-template-columns: minmax(220px, 0.82fr) 1.5fr; min-height: 175px; margin-bottom: 18px; overflow: hidden; border: 0; border-radius: 14px; background: var(--surface); box-shadow: 0 14px 36px rgb(40 111 161 / 11%); }
-.status-primary { display: flex; align-items: center; gap: 19px; padding: 28px; border-right: 1px solid var(--rule); background: var(--accent-mist); }
-.status-primary .label { display: block; color: var(--muted); font-size: 10px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; }
+.status-board { display: grid; grid-template-columns: minmax(220px, 0.82fr) 1.5fr; min-height: 175px; margin-bottom: 18px; overflow: hidden; border: 0; border-radius: 14px; background: var(--surface); box-shadow: 0 16px 40px rgb(35 104 155 / 14%); }
+.status-primary { display: flex; align-items: center; gap: 19px; padding: 28px; border-right: 0; background: var(--accent); color: white; }
+.status-primary .label { display: block; color: #d9efff; font-size: 10px; font-weight: 650; letter-spacing: 0.08em; text-transform: uppercase; }
 .status-primary strong { display: block; margin-top: 5px; font-family: "Avenir Next", sans-serif; font-size: 21px; }
-.status-primary p { margin: 4px 0 0; color: var(--muted); font-size: 11px; line-height: 1.4; }
-.status-ring { position: relative; flex: none; width: 54px; height: 54px; border: 1px solid #b8d4e7; border-radius: 50%; background: #f7fcff; }
-.status-ring::before, .status-ring::after { content: ""; position: absolute; top: 26px; width: 16px; height: 1px; background: #82a8c0; }.status-ring::before { right: 36px; }.status-ring::after { left: 36px; }
-.status-ring span { position: absolute; inset: 20px; border: 1px solid #7198b2; border-radius: 50%; background: white; }
+.status-primary p { margin: 4px 0 0; color: #d9efff; font-size: 11px; line-height: 1.4; }
+.status-ring { position: relative; flex: none; width: 54px; height: 54px; border: 1px solid rgb(255 255 255 / 70%); border-radius: 50%; background: rgb(255 255 255 / 12%); }
+.status-ring::before, .status-ring::after { content: ""; position: absolute; top: 26px; width: 16px; height: 1px; background: #bdeaff; }.status-ring::before { right: 36px; }.status-ring::after { left: 36px; }
+.status-ring span { position: absolute; inset: 20px; border: 1px solid white; border-radius: 50%; background: #a9e5ff; }
 .status-ring.is-on { border-color: color-mix(in srgb, var(--accent), white 48%); background: var(--accent-soft); box-shadow: inset 0 0 0 5px rgb(255 255 255 / 45%); }.status-ring.is-on::before, .status-ring.is-on::after { background: var(--accent); }.status-ring.is-on span { border-color: var(--accent); background: var(--accent); }
 .status-facts { display: grid; grid-template-columns: repeat(2, 1fr); margin: 0; }
 .status-facts > div { display: flex; flex-direction: column; justify-content: center; padding: 19px 24px; }.status-facts > div:nth-child(odd) { border-right: 1px solid var(--rule); }.status-facts > div:nth-child(-n+2) { border-bottom: 1px solid var(--rule); }
@@ -93,7 +98,7 @@ code { font-family: "SFMono-Regular", Menlo, monospace; font-size: 0.88em; }
 .node-test-progress span { display: block; height: 100%; border-radius: inherit; background: var(--accent); transition: width 160ms ease-out; }
 .control-row { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; }.control-row label { font-size: 12px; font-weight: 600; }
 .segmented { display: inline-flex; padding: 2px; border: 1px solid #c8e0f0; border-radius: 9px; background: var(--accent-soft); }
-.segmented button { min-width: 82px; padding: 5px 9px; border: 0; border-radius: 7px; background: transparent; color: #48677e; font-size: 11px; cursor: pointer; }.segmented button.is-active { background: white; color: var(--accent-strong); font-weight: 650; box-shadow: 0 2px 7px rgb(42 102 145 / 12%); }
+.segmented button { min-width: 82px; padding: 5px 9px; border: 0; border-radius: 7px; background: transparent; color: #48677e; font-size: 11px; cursor: pointer; }.segmented button.is-active { background: var(--accent); color: white; font-weight: 650; box-shadow: 0 4px 10px rgb(19 119 204 / 20%); }
 .page-footnote { margin-top: 30px; padding-top: 13px; border-top: 1px solid color-mix(in srgb, var(--rule), transparent 25%); color: var(--muted); font-size: 10px; line-height: 1.55; }
 
 .table-head { min-height: 34px; padding: 0 11px; background: var(--surface-soft); color: var(--muted); font-size: 10px; font-weight: 650; }
@@ -179,7 +184,7 @@ code { font-family: "SFMono-Regular", Menlo, monospace; font-size: 0.88em; }
 .field { display: grid; gap: 6px; }.field span, .readonly-field > span { color: var(--muted); font-size: 10px; }.field input { height: 32px; padding: 5px 9px; border: 1px solid var(--control); border-radius: 8px; background: white; font-size: 11px; }.readonly-field { display: grid; gap: 6px; margin-top: 16px; }.readonly-field code { overflow: hidden; padding: 8px 9px; border: 1px solid var(--rule); border-radius: 7px; background: var(--surface-soft); color: #47657b; text-overflow: ellipsis; white-space: nowrap; }
 
 .toast { position: fixed; z-index: 200; right: 22px; bottom: 22px; max-width: 420px; padding: 10px 14px; border: 1px solid #295f86; border-radius: 9px; background: #174b70; color: white; box-shadow: 0 12px 34px rgb(18 72 108 / 24%); font-size: 11px; animation: toast-in 170ms ease-out; }.toast--error { border-color: #9c4152; background: #8f3548; }
-.splash { display: grid; align-content: center; justify-items: center; width: 100%; height: 100%; background: var(--canvas); }.splash .wordmark { font-size: 28px; }.splash p { color: var(--muted); font-size: 11px; }
+.splash { display: grid; align-content: center; justify-items: center; width: 100%; height: 100%; background: var(--canvas); }.splash .brand-mark { width: 42px; height: 42px; }.splash .wordmark { font-size: 28px; }.splash p { color: var(--muted); font-size: 11px; }
 
 @keyframes modal-in { from { opacity: 0; transform: translateY(7px) scale(0.99); } }
 @keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
