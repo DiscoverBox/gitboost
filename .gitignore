@@ -7,3 +7,7 @@ src-tauri/target
 *.log
 playwright-report
 test-results
+.agents
+.codex
+.impeccable
+PRODUCT.md

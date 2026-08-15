@@ -598,8 +598,9 @@ impl AppCore {
     where
         F: Fn(&NodeDefinition, &HealthSummary) -> HealthSummary,
     {
-        let _run = self.full_node_test_lock.lock();
-        *self.full_node_test_result.lock() = None;
+        let Some(_run) = self.full_node_test_lock.try_lock() else {
+            return Ok(FailoverOutcome::Skipped);
+        };
 
         let before = self.settings()?;
         if !before.acceleration_enabled
@@ -608,6 +609,7 @@ impl AppCore {
         {
             return Ok(FailoverOutcome::Skipped);
         }
+        *self.full_node_test_result.lock() = None;
         let from = self
             .nodes()?
             .into_iter()
@@ -3115,6 +3117,7 @@ mod tests {
             "https://second.example/https://github.com/",
         );
         configure_automatic_nodes(&core, &[first.clone(), second.clone()], &first.id);
+        *core.full_node_test_result.lock() = Some(Err("stale result".into()));
 
         let outcome = core
             .recheck_failed_node_with(&first.id, |_, previous| HealthSummary {
@@ -3135,6 +3138,7 @@ mod tests {
                 to: "Second".into()
             }
         );
+        assert!(core.full_node_test_result.lock().is_none());
         let settings = core.settings().unwrap();
         assert_eq!(settings.current_node_id.as_deref(), Some("second"));
         assert!(settings.acceleration_enabled);
@@ -3256,6 +3260,34 @@ mod tests {
             core.health().unwrap()["first"].status,
             NodeStatus::Available
         );
+    }
+
+    #[test]
+    fn failed_node_recheck_skips_without_clearing_results_while_a_test_is_running() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let node = custom_node(
+            "current",
+            "Current",
+            "https://current.example/https://github.com/",
+        );
+        configure_automatic_nodes(&core, std::slice::from_ref(&node), &node.id);
+        *core.full_node_test_result.lock() = Some(Err("existing result".into()));
+        let active = core.full_node_test_lock.lock();
+
+        let outcome = core
+            .recheck_failed_node_with(&node.id, |_, _| {
+                panic!("recheck must not probe while another node test is running")
+            })
+            .unwrap();
+
+        assert_eq!(outcome, FailoverOutcome::Skipped);
+        assert!(core
+            .full_node_test_result
+            .lock()
+            .as_ref()
+            .is_some_and(|result| result.as_ref().unwrap_err() == "existing result"));
+        drop(active);
     }
 
     #[test]
