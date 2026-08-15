@@ -15,6 +15,7 @@ GitBoost 是一个 macOS / Windows 桌面工具：用户继续使用原始 `http
 - 独立 `gitboost.gitconfig`、候选配置验证、原子替换、精确 include 注册与恢复。
 - Git 冲突、有效 fetch/push 地址、显式 `pushurl` 的脱敏诊断。
 - 基于 Git Trace2 Unix Stream Socket 的实际连接日志，区分加速线路、GitHub 直连和其他重写；不落盘原始参数或凭据。
+- 自动模式下，实际 Git 读取失败会触发当前节点的真实 Git 复检；确认节点异常后为下一次命令切换线路，没有候选节点时恢复 GitHub 直连。
 - macOS / Windows 托盘控制、定时健康检查、登录时启动。
 
 ## 路由清单的匹配边界
@@ -75,4 +76,4 @@ node scripts/encrypt-nodes.mjs /path/to/plain-nodes.json nodes.enc.json
 
 数据保存在系统的应用数据目录 `pro.gitboost.desktop` 下。`system-nodes.json` 保存最近一次有效的系统节点目录，`nodes.json` 只保存用户自定义节点。恢复操作只删除 GitBoost 自己注册的 `include.path` 并清空自己的重写规则，不修改任何仓库的 remote。
 
-“使用日志”要求 GitBoost 正在运行，只保留最近 7 天的脱敏记录。应用退出后加速配置仍然有效，但没有本地 Socket 接收 Trace2 事件，因此退出期间的 Git 操作不会补记；Socket 不可用不会阻断 Git 命令。
+“使用日志”要求 GitBoost 正在运行，只保留最近 7 天的脱敏记录。关闭使用日志不会关闭自动故障复检，也不会写入使用记录。应用退出后加速配置仍然有效，但没有本地 Socket 接收 Trace2 事件，因此退出期间的 Git 操作不会补记，也无法根据实际 Git 失败自动换线；Socket 不可用不会阻断 Git 命令。

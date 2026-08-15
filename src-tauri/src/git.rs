@@ -217,7 +217,9 @@ pub fn build_config(
 ) -> Result<String, String> {
     let mut output =
         String::from("# Managed by GitBoost. Do not store credentials in this file.\n");
-    if settings.usage_logging_enabled {
+    let needs_trace = settings.usage_logging_enabled
+        || (settings.acceleration_enabled && settings.line_mode == LineMode::Automatic);
+    if needs_trace {
         if let Some(socket) = trace_socket {
             let target = format!("af_unix:stream:{}", socket.display());
             output.push_str(&format!(
@@ -764,6 +766,50 @@ mod tests {
         )
         .unwrap();
         assert!(config.contains("eventTarget = \"af_unix:stream:/tmp/gitboost-trace.sock\""));
+    }
+
+    #[test]
+    fn automatic_acceleration_keeps_trace2_when_usage_logging_is_disabled() {
+        let settings = Settings {
+            acceleration_enabled: true,
+            usage_logging_enabled: false,
+            route_scope: RouteScope::Global,
+            ..Settings::default()
+        };
+
+        let config = build_config(
+            &settings,
+            Some(&node()),
+            &[],
+            Some(Path::new("/tmp/gitboost-trace.sock")),
+        )
+        .unwrap();
+
+        assert!(config.contains("eventTarget = \"af_unix:stream:/tmp/gitboost-trace.sock\""));
+    }
+
+    #[test]
+    fn fixed_acceleration_without_usage_logging_does_not_configure_trace2() {
+        let node_id = node().id;
+        let settings = Settings {
+            acceleration_enabled: true,
+            usage_logging_enabled: false,
+            line_mode: LineMode::Fixed,
+            fixed_node_id: Some(node_id.clone()),
+            current_node_id: Some(node_id),
+            route_scope: RouteScope::Global,
+            ..Settings::default()
+        };
+
+        let config = build_config(
+            &settings,
+            Some(&node()),
+            &[],
+            Some(Path::new("/tmp/gitboost-trace.sock")),
+        )
+        .unwrap();
+
+        assert!(!config.contains("[trace2]"));
     }
 
     #[test]

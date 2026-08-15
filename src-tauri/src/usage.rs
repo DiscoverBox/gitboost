@@ -1,4 +1,4 @@
-use crate::core::AppCore;
+use crate::core::{AppCore, FailoverOutcome};
 use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use socket2::{Domain, SockAddr, Socket, Type};
@@ -8,7 +8,7 @@ use std::{
     io::{BufRead, BufReader},
     path::Path,
 };
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Emitter, Manager};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -146,7 +146,15 @@ pub fn start_listener(app: AppHandle) {
                 match line {
                     Ok(line) if !line.is_empty() => {
                         if let Some(completed) = assembler.ingest(&line) {
-                            let _ = app.state::<AppCore>().record_usage(completed);
+                            match app.state::<AppCore>().observe_git_operation(completed) {
+                                Ok(Some(node_id)) => {
+                                    start_failed_node_recheck(app.clone(), node_id)
+                                }
+                                Ok(None) => {}
+                                Err(error) => app.state::<AppCore>().usage_connection_failed(
+                                    &format!("Git operation observation failed: {error}"),
+                                ),
+                            }
                         }
                     }
                     Ok(_) => {}
@@ -163,9 +171,46 @@ pub fn start_listener(app: AppHandle) {
     });
 }
 
+fn start_failed_node_recheck(app: AppHandle, node_id: String) {
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = app.state::<AppCore>().recheck_failed_node(&node_id);
+        match result {
+            Ok(FailoverOutcome::Skipped) => {}
+            Ok(outcome) => {
+                if let Ok(snapshot) = app.state::<AppCore>().snapshot() {
+                    crate::refresh_tray(&app, &snapshot);
+                    let _ = app.emit("snapshot-updated", snapshot);
+                }
+                match outcome {
+                    FailoverOutcome::Switched { from, to } => {
+                        let _ = app.emit(
+                            "operation-error",
+                            format!(
+                                "线路 {from} 检测失败，已切换到 {to}。请重新执行刚才的 Git 命令。"
+                            ),
+                        );
+                    }
+                    FailoverOutcome::FellBackToDirect { from } => {
+                        let _ = app.emit(
+                            "operation-error",
+                            format!("线路 {from} 检测失败，暂无其他可用线路，已恢复 GitHub 直连。请重新执行刚才的 Git 命令。"),
+                        );
+                    }
+                    FailoverOutcome::Unconfirmed => {}
+                    FailoverOutcome::Skipped => unreachable!(),
+                }
+            }
+            Err(error) => app
+                .state::<AppCore>()
+                .usage_connection_failed(&format!("automatic failover recheck failed: {error}")),
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::TEST_REPOSITORY;
 
     #[test]
     fn assembles_remote_operation_without_retaining_raw_argv() {
@@ -181,5 +226,32 @@ mod tests {
             "https://fastgit.cc/https://github.com/octocat/Hello-World.git"
         );
         assert_eq!(event.duration_ms, 1234);
+    }
+
+    #[test]
+    fn real_git_failure_produces_a_completed_remote_trace() {
+        let directory = tempfile::tempdir().unwrap();
+        let trace_path = directory.path().join("trace.json");
+        let rewrite_base = "https://127.0.0.1:1/https://github.com/";
+        let rewrite = format!("url.{rewrite_base}.insteadOf=https://github.com/");
+        let output = std::process::Command::new("git")
+            .args(["-c", &rewrite, "ls-remote", TEST_REPOSITORY, "HEAD"])
+            .env("GIT_TRACE2_EVENT", &trace_path)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+
+        let mut assembler = TraceAssembler::default();
+        let completed = fs::read(&trace_path)
+            .unwrap()
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.is_empty())
+            .filter_map(|line| assembler.ingest(line))
+            .next()
+            .expect("real Git must emit a completed remote trace");
+
+        assert_eq!(completed.command, "ls-remote");
+        assert!(completed.effective_url.starts_with(rewrite_base));
+        assert_ne!(completed.exit_code, 0);
     }
 }

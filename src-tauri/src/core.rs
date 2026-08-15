@@ -73,6 +73,14 @@ enum AutomaticPoolUpdate {
     Replace(HashSet<String>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FailoverOutcome {
+    Skipped,
+    Unconfirmed,
+    Switched { from: String, to: String },
+    FellBackToDirect { from: String },
+}
+
 #[derive(Deserialize)]
 struct EncryptedSystemCatalog {
     version: u8,
@@ -539,13 +547,38 @@ impl AppCore {
             .try_lock()
             .ok_or_else(|| "线路检测正在进行，请稍后再试".to_string())?;
         *self.full_node_test_result.lock() = None;
+        self.test_node_locked(node_id, git::test_node)
+    }
+
+    fn test_node_locked<F>(&self, node_id: &str, test: F) -> Result<NodeEntry, String>
+    where
+        F: Fn(&NodeDefinition, &HealthSummary) -> HealthSummary,
+    {
+        let (node, tested) = self.test_node_health(node_id, test)?;
+        self.persist_test_results(
+            vec![(node.id.clone(), tested)],
+            AutomaticPoolUpdate::Include(node.id.clone()),
+        )?
+        .into_iter()
+        .find(|entry| entry.node.id == node.id)
+        .ok_or_else(|| "节点在检测期间已被删除".to_string())
+    }
+
+    fn test_node_health<F>(
+        &self,
+        node_id: &str,
+        test: F,
+    ) -> Result<(NodeDefinition, HealthSummary), String>
+    where
+        F: Fn(&NodeDefinition, &HealthSummary) -> HealthSummary,
+    {
         let node = self
             .nodes()?
             .into_iter()
             .find(|node| node.id == node_id)
             .ok_or_else(|| "节点不存在".to_string())?;
         let previous = self.health()?.remove(node_id).unwrap_or_default();
-        let tested = git::test_node(&node, &previous);
+        let tested = test(&node, &previous);
         let _ = append_log(
             &self.paths.logs,
             "INFO",
@@ -554,13 +587,89 @@ impl AppCore {
                 node.id, tested.status
             ),
         );
-        self.persist_test_results(
-            vec![(node.id.clone(), tested)],
-            AutomaticPoolUpdate::Include(node.id.clone()),
-        )?
-        .into_iter()
-        .find(|entry| entry.node.id == node.id)
-        .ok_or_else(|| "节点在检测期间已被删除".to_string())
+        Ok((node, tested))
+    }
+
+    pub fn recheck_failed_node(&self, node_id: &str) -> Result<FailoverOutcome, String> {
+        self.recheck_failed_node_with(node_id, git::test_node)
+    }
+
+    fn recheck_failed_node_with<F>(&self, node_id: &str, test: F) -> Result<FailoverOutcome, String>
+    where
+        F: Fn(&NodeDefinition, &HealthSummary) -> HealthSummary,
+    {
+        let _run = self.full_node_test_lock.lock();
+        *self.full_node_test_result.lock() = None;
+
+        let before = self.settings()?;
+        if !before.acceleration_enabled
+            || before.line_mode != LineMode::Automatic
+            || before.current_node_id.as_deref() != Some(node_id)
+        {
+            return Ok(FailoverOutcome::Skipped);
+        }
+        let from = self
+            .nodes()?
+            .into_iter()
+            .find(|node| node.id == node_id)
+            .map(|node| node.name)
+            .ok_or_else(|| "失败线路已不存在".to_string())?;
+
+        let (node, tested) = self.test_node_health(node_id, test)?;
+        let after = {
+            let _guard = self.lock.lock();
+            let current = self.settings()?;
+            if !current.acceleration_enabled
+                || current.line_mode != LineMode::Automatic
+                || current.current_node_id.as_deref() != Some(node_id)
+            {
+                return Ok(FailoverOutcome::Skipped);
+            }
+            if is_usable_health(&tested) {
+                None
+            } else {
+                self.persist_test_results_locked(
+                    vec![(node.id.clone(), tested)],
+                    AutomaticPoolUpdate::Include(node.id),
+                )?;
+                Some(self.settings()?)
+            }
+        };
+        let outcome = match after
+            .as_ref()
+            .and_then(|settings| settings.current_node_id.as_deref())
+        {
+            Some(current) if current != node_id => {
+                let to = self
+                    .nodes()?
+                    .into_iter()
+                    .find(|node| node.id == current)
+                    .map(|node| node.name)
+                    .unwrap_or_else(|| "其他可用线路".into());
+                FailoverOutcome::Switched { from, to }
+            }
+            None if after.as_ref().is_some_and(|settings| {
+                !settings.acceleration_enabled || settings.line_mode == LineMode::Direct
+            }) =>
+            {
+                FailoverOutcome::FellBackToDirect { from }
+            }
+            _ => FailoverOutcome::Unconfirmed,
+        };
+        let message = match &outcome {
+            FailoverOutcome::Skipped => "automatic failover skipped".to_string(),
+            FailoverOutcome::Unconfirmed => {
+                format!("Git operation failed but node recheck passed: node={node_id}")
+            }
+            FailoverOutcome::Switched { .. } => {
+                format!("automatic failover selected another node: previous={node_id}")
+            }
+            FailoverOutcome::FellBackToDirect { .. } => {
+                format!("automatic failover restored direct routing: previous={node_id}")
+            }
+        };
+        let _ = append_log(&self.paths.logs, "INFO", &message);
+        Ok(outcome)
     }
 
     #[cfg(test)]
@@ -643,6 +752,14 @@ impl AppCore {
         pool_update: AutomaticPoolUpdate,
     ) -> Result<Vec<NodeEntry>, String> {
         let _guard = self.lock.lock();
+        self.persist_test_results_locked(tested, pool_update)
+    }
+
+    fn persist_test_results_locked(
+        &self,
+        tested: Vec<(String, HealthSummary)>,
+        pool_update: AutomaticPoolUpdate,
+    ) -> Result<Vec<NodeEntry>, String> {
         let nodes = self.nodes()?;
         let live_ids: HashSet<&str> = nodes.iter().map(|node| node.id.as_str()).collect();
         let tested_ids: HashSet<String> =
@@ -1179,16 +1296,20 @@ impl AppCore {
         })
     }
 
-    pub fn record_usage(&self, trace: CompletedTrace) -> Result<(), String> {
+    pub fn observe_git_operation(&self, trace: CompletedTrace) -> Result<Option<String>, String> {
         let _guard = self.lock.lock();
         let settings = self.settings()?;
-        if !settings.usage_logging_enabled {
-            return Ok(());
-        }
         let nodes = self.nodes()?;
-        let matched_node = nodes
-            .iter()
-            .find(|node| trace.effective_url.starts_with(&node.rewrite_base));
+        let matched_node = match_rewrite_node(&trace.effective_url, &nodes);
+        let failed_node_id = matched_node
+            .filter(|node| {
+                trace.exit_code != 0
+                    && supports_automatic_failover(&trace.command)
+                    && settings.acceleration_enabled
+                    && settings.line_mode == LineMode::Automatic
+                    && settings.current_node_id.as_deref() == Some(node.id.as_str())
+            })
+            .map(|node| node.id.clone());
         let (route, node_name) = if let Some(node) = matched_node {
             (UsageRoute::Accelerated, Some(node.name.clone()))
         } else if url::Url::parse(&trace.effective_url)
@@ -1210,21 +1331,30 @@ impl AppCore {
             .ok()
             .and_then(|url| url.host_str().map(str::to_owned))
             .unwrap_or_else(|| "未知主机".into());
-        append_usage_event(
-            &self.paths.logs,
-            &UsageEvent {
-                id: Uuid::new_v4().to_string(),
-                occurred_at: trace.occurred_at,
-                command: trace.command,
-                repository,
-                route,
-                node_name,
-                connection_host,
-                succeeded: trace.exit_code == 0,
-                exit_code: trace.exit_code,
-                duration_ms: trace.duration_ms,
-            },
-        )
+        if settings.usage_logging_enabled {
+            if let Err(error) = append_usage_event(
+                &self.paths.logs,
+                &UsageEvent {
+                    id: Uuid::new_v4().to_string(),
+                    occurred_at: trace.occurred_at,
+                    command: trace.command,
+                    repository,
+                    route,
+                    node_name,
+                    connection_host,
+                    succeeded: trace.exit_code == 0,
+                    exit_code: trace.exit_code,
+                    duration_ms: trace.duration_ms,
+                },
+            ) {
+                let _ = append_log(
+                    &self.paths.logs,
+                    "ERROR",
+                    &format!("usage audit write failed: {error}"),
+                );
+            }
+        }
+        Ok(failed_node_id)
     }
 
     pub fn diagnostics(&self, repository_path: Option<&Path>) -> Result<DiagnosticReport, String> {
@@ -1405,9 +1535,8 @@ fn validate_configuration(
 }
 
 fn sanitize_repository(raw: &str, nodes: &[NodeDefinition]) -> Option<String> {
-    let logical = nodes
-        .iter()
-        .find_map(|node| raw.strip_prefix(&node.rewrite_base))
+    let logical = match_rewrite_node(raw, nodes)
+        .and_then(|node| raw.strip_prefix(&node.rewrite_base))
         .map(|suffix| format!("https://github.com/{suffix}"))
         .unwrap_or_else(|| raw.to_owned());
     let mut url = url::Url::parse(&logical).ok()?;
@@ -1421,6 +1550,13 @@ fn sanitize_repository(raw: &str, nodes: &[NodeDefinition]) -> Option<String> {
     Some(url.to_string())
 }
 
+fn match_rewrite_node<'a>(raw: &str, nodes: &'a [NodeDefinition]) -> Option<&'a NodeDefinition> {
+    nodes
+        .iter()
+        .filter(|node| raw.starts_with(&node.rewrite_base))
+        .max_by_key(|node| node.rewrite_base.len())
+}
+
 fn redact_import(input: &str) -> String {
     if input.contains("://") {
         git::sanitize_url(input)
@@ -1431,6 +1567,10 @@ fn redact_import(input: &str) -> String {
 
 fn is_usable_health(health: &HealthSummary) -> bool {
     matches!(health.status, NodeStatus::Available | NodeStatus::Slow)
+}
+
+fn supports_automatic_failover(command: &str) -> bool {
+    matches!(command, "clone" | "fetch" | "pull" | "ls-remote")
 }
 
 fn select_auto_pool(
@@ -1694,6 +1834,48 @@ mod tests {
             "ciphertext": BASE64.encode(ciphertext),
         }))
         .unwrap()
+    }
+
+    fn configure_automatic_nodes(core: &AppCore, nodes: &[NodeDefinition], current_node_id: &str) {
+        atomic_write_json(&core.paths.nodes, &nodes).unwrap();
+        let health: HashMap<String, HealthSummary> = nodes
+            .iter()
+            .enumerate()
+            .map(|(index, node)| {
+                (
+                    node.id.clone(),
+                    HealthSummary {
+                        status: NodeStatus::Available,
+                        in_auto_pool: true,
+                        success_count: 2,
+                        attempt_count: 2,
+                        median_latency_ms: Some(20 + index as u64 * 10),
+                        checked_at: Some(Utc::now()),
+                        ..HealthSummary::default()
+                    },
+                )
+            })
+            .collect();
+        atomic_write_json(&core.paths.health, &health).unwrap();
+        let settings = Settings {
+            acceleration_enabled: true,
+            route_scope: RouteScope::Global,
+            line_mode: LineMode::Automatic,
+            current_node_id: Some(current_node_id.into()),
+            usage_logging_enabled: false,
+            ..Settings::default()
+        };
+        atomic_write_json(&core.paths.settings, &settings).unwrap();
+    }
+
+    fn custom_node(id: &str, name: &str, rewrite_base: &str) -> NodeDefinition {
+        NodeDefinition {
+            id: id.into(),
+            name: name.into(),
+            rewrite_base: rewrite_base.into(),
+            enabled: true,
+            built_in: false,
+        }
     }
 
     #[test]
@@ -2748,17 +2930,20 @@ mod tests {
     fn usage_audit_records_route_and_removes_credentials() {
         let directory = tempfile::tempdir().unwrap();
         let core = AppCore::new(directory.path().to_path_buf()).unwrap();
-        core.record_usage(CompletedTrace {
-            occurred_at: Utc::now(),
-            command: "clone".into(),
-            original_url: Some(
-                "https://secret-token@github.com/octocat/Hello-World.git?access=hidden".into(),
-            ),
-            effective_url: "https://fastgit.cc/https://github.com/octocat/Hello-World.git".into(),
-            exit_code: 0,
-            duration_ms: 321,
-        })
-        .unwrap();
+        let recheck = core
+            .observe_git_operation(CompletedTrace {
+                occurred_at: Utc::now(),
+                command: "clone".into(),
+                original_url: Some(
+                    "https://secret-token@github.com/octocat/Hello-World.git?access=hidden".into(),
+                ),
+                effective_url: "https://fastgit.cc/https://github.com/octocat/Hello-World.git"
+                    .into(),
+                exit_code: 0,
+                duration_ms: 321,
+            })
+            .unwrap();
+        assert!(recheck.is_none());
         let log = core.usage_log().unwrap();
         assert_eq!(log.events.len(), 1);
         assert_eq!(log.events[0].route, UsageRoute::Accelerated);
@@ -2772,6 +2957,354 @@ mod tests {
                 .unwrap()
                 .contains("secret-token")
         );
+    }
+
+    #[test]
+    fn failed_accelerated_read_requests_recheck_when_usage_logging_is_disabled() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let node = custom_node(
+            "current",
+            "Current",
+            "https://current.example/https://github.com/",
+        );
+        configure_automatic_nodes(&core, std::slice::from_ref(&node), &node.id);
+
+        let recheck = core
+            .observe_git_operation(CompletedTrace {
+                occurred_at: Utc::now(),
+                command: "clone".into(),
+                original_url: Some("https://github.com/openai/codex.git".into()),
+                effective_url: format!("{}openai/codex.git", node.rewrite_base),
+                exit_code: 128,
+                duration_ms: 500,
+            })
+            .unwrap();
+
+        assert_eq!(recheck.as_deref(), Some("current"));
+        assert!(core.usage_log().unwrap().events.is_empty());
+    }
+
+    #[test]
+    fn failure_observation_ignores_success_push_direct_and_fixed_mode() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let node = custom_node(
+            "current",
+            "Current",
+            "https://current.example/https://github.com/",
+        );
+        configure_automatic_nodes(&core, std::slice::from_ref(&node), &node.id);
+        let trace = |command: &str, effective_url: String, exit_code: i32| CompletedTrace {
+            occurred_at: Utc::now(),
+            command: command.into(),
+            original_url: Some("https://github.com/openai/codex.git".into()),
+            effective_url,
+            exit_code,
+            duration_ms: 100,
+        };
+
+        assert!(core
+            .observe_git_operation(trace(
+                "clone",
+                format!("{}openai/codex.git", node.rewrite_base),
+                0,
+            ))
+            .unwrap()
+            .is_none());
+        assert!(core
+            .observe_git_operation(trace(
+                "push",
+                format!("{}openai/codex.git", node.rewrite_base),
+                128,
+            ))
+            .unwrap()
+            .is_none());
+        assert!(core
+            .observe_git_operation(trace(
+                "clone",
+                "https://github.com/openai/codex.git".into(),
+                128,
+            ))
+            .unwrap()
+            .is_none());
+
+        let mut settings = core.settings().unwrap();
+        settings.line_mode = LineMode::Fixed;
+        settings.fixed_node_id = Some(node.id.clone());
+        atomic_write_json(&core.paths.settings, &settings).unwrap();
+        assert!(core
+            .observe_git_operation(trace(
+                "clone",
+                format!("{}openai/codex.git", node.rewrite_base),
+                128,
+            ))
+            .unwrap()
+            .is_none());
+    }
+
+    #[test]
+    fn failure_observation_uses_the_most_specific_matching_node_prefix() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let shorter = custom_node(
+            "shorter",
+            "Shorter",
+            "https://proxy.example/service/https://github.com/",
+        );
+        let longer = custom_node(
+            "longer",
+            "Longer",
+            "https://proxy.example/service/https://github.com/nested/https://github.com/",
+        );
+        assert_eq!(
+            normalize_rewrite_base(&longer.rewrite_base).unwrap(),
+            longer.rewrite_base
+        );
+        configure_automatic_nodes(&core, &[shorter, longer.clone()], &longer.id);
+        let mut settings = core.settings().unwrap();
+        settings.usage_logging_enabled = true;
+        atomic_write_json(&core.paths.settings, &settings).unwrap();
+
+        let failed_node = core
+            .observe_git_operation(CompletedTrace {
+                occurred_at: Utc::now(),
+                command: "fetch".into(),
+                original_url: None,
+                effective_url: format!("{}octocat/Hello-World.git", longer.rewrite_base),
+                exit_code: 128,
+                duration_ms: 10,
+            })
+            .unwrap();
+
+        assert_eq!(failed_node.as_deref(), Some("longer"));
+        let usage = core.usage_log().unwrap();
+        assert_eq!(usage.events[0].node_name.as_deref(), Some("Longer"));
+        assert_eq!(usage.events[0].repository, TEST_REPOSITORY);
+    }
+
+    #[test]
+    fn automatic_failover_only_supports_read_commands() {
+        for command in ["clone", "fetch", "pull", "ls-remote"] {
+            assert!(supports_automatic_failover(command));
+        }
+        for command in ["push", "status", "submodule", "git"] {
+            assert!(!supports_automatic_failover(command));
+        }
+    }
+
+    #[test]
+    fn failed_node_recheck_switches_to_the_next_usable_node() {
+        const MARKER: &str = "GITBOOST_FAILED_NODE_SWITCH_CHILD";
+        if rerun_with_isolated_git(
+            "core::tests::failed_node_recheck_switches_to_the_next_usable_node",
+            MARKER,
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let first = custom_node(
+            "first",
+            "First",
+            "https://first.example/https://github.com/",
+        );
+        let second = custom_node(
+            "second",
+            "Second",
+            "https://second.example/https://github.com/",
+        );
+        configure_automatic_nodes(&core, &[first.clone(), second.clone()], &first.id);
+
+        let outcome = core
+            .recheck_failed_node_with(&first.id, |_, previous| HealthSummary {
+                status: NodeStatus::Unavailable,
+                in_auto_pool: previous.in_auto_pool,
+                attempt_count: previous.attempt_count + 2,
+                consecutive_failures: 2,
+                checked_at: Some(Utc::now()),
+                failure_reason: Some("连接超时".into()),
+                ..previous.clone()
+            })
+            .unwrap();
+
+        assert_eq!(
+            outcome,
+            FailoverOutcome::Switched {
+                from: "First".into(),
+                to: "Second".into()
+            }
+        );
+        let settings = core.settings().unwrap();
+        assert_eq!(settings.current_node_id.as_deref(), Some("second"));
+        assert!(settings.acceleration_enabled);
+        assert!(fs::read_to_string(&core.paths.gitconfig)
+            .unwrap()
+            .contains(&second.rewrite_base));
+    }
+
+    #[test]
+    fn usable_failed_node_recheck_does_not_reselect_a_faster_node() {
+        const MARKER: &str = "GITBOOST_USABLE_RECHECK_CHILD";
+        if rerun_with_isolated_git(
+            "core::tests::usable_failed_node_recheck_does_not_reselect_a_faster_node",
+            MARKER,
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let first = custom_node(
+            "first",
+            "First",
+            "https://first.example/https://github.com/",
+        );
+        let second = custom_node(
+            "second",
+            "Second",
+            "https://second.example/https://github.com/",
+        );
+        configure_automatic_nodes(&core, &[first.clone(), second], &first.id);
+
+        let outcome = core
+            .recheck_failed_node_with(&first.id, |_, previous| HealthSummary {
+                status: NodeStatus::Available,
+                in_auto_pool: true,
+                success_count: previous.success_count + 2,
+                attempt_count: previous.attempt_count + 2,
+                median_latency_ms: Some(1_000),
+                consecutive_failures: 0,
+                checked_at: Some(Utc::now()),
+                failure_reason: None,
+                recent_latencies_ms: vec![1_000],
+            })
+            .unwrap();
+
+        assert_eq!(outcome, FailoverOutcome::Unconfirmed);
+        assert_eq!(
+            core.settings().unwrap().current_node_id.as_deref(),
+            Some("first")
+        );
+        assert_eq!(core.health().unwrap()["first"].median_latency_ms, Some(20));
+    }
+
+    #[test]
+    fn usage_log_write_failure_does_not_suppress_failover_request() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let node = custom_node(
+            "current",
+            "Current",
+            "https://current.example/https://github.com/",
+        );
+        configure_automatic_nodes(&core, std::slice::from_ref(&node), &node.id);
+        let mut settings = core.settings().unwrap();
+        settings.usage_logging_enabled = true;
+        atomic_write_json(&core.paths.settings, &settings).unwrap();
+        fs::remove_dir_all(&core.paths.logs).unwrap();
+        fs::write(&core.paths.logs, b"not a directory").unwrap();
+
+        let failed_node = core
+            .observe_git_operation(CompletedTrace {
+                occurred_at: Utc::now(),
+                command: "fetch".into(),
+                original_url: Some(TEST_REPOSITORY.into()),
+                effective_url: format!("{}octocat/Hello-World.git", node.rewrite_base),
+                exit_code: 128,
+                duration_ms: 10,
+            })
+            .unwrap();
+
+        assert_eq!(failed_node.as_deref(), Some("current"));
+    }
+
+    #[test]
+    fn stale_failure_does_not_override_a_newer_line_selection() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let first = custom_node(
+            "first",
+            "First",
+            "https://first.example/https://github.com/",
+        );
+        let second = custom_node(
+            "second",
+            "Second",
+            "https://second.example/https://github.com/",
+        );
+        configure_automatic_nodes(&core, &[first.clone(), second.clone()], &first.id);
+
+        let outcome = core
+            .recheck_failed_node_with(&first.id, |_, previous| {
+                let mut settings = core.settings().unwrap();
+                settings.current_node_id = Some(second.id.clone());
+                atomic_write_json(&core.paths.settings, &settings).unwrap();
+                HealthSummary {
+                    status: NodeStatus::Unavailable,
+                    consecutive_failures: 2,
+                    ..previous.clone()
+                }
+            })
+            .unwrap();
+
+        assert_eq!(outcome, FailoverOutcome::Skipped);
+        assert_eq!(
+            core.settings().unwrap().current_node_id.as_deref(),
+            Some("second")
+        );
+        assert_eq!(
+            core.health().unwrap()["first"].status,
+            NodeStatus::Available
+        );
+    }
+
+    #[test]
+    fn real_git_recheck_falls_back_to_direct_when_no_node_is_usable() {
+        const MARKER: &str = "GITBOOST_REAL_FAILURE_RECHECK_CHILD";
+        if rerun_with_isolated_git(
+            "core::tests::real_git_recheck_falls_back_to_direct_when_no_node_is_usable",
+            MARKER,
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let node = custom_node(
+            "unreachable",
+            "Unreachable",
+            "https://127.0.0.1:1/https://github.com/",
+        );
+        configure_automatic_nodes(&core, std::slice::from_ref(&node), &node.id);
+
+        let failed_node = core
+            .observe_git_operation(CompletedTrace {
+                occurred_at: Utc::now(),
+                command: "clone".into(),
+                original_url: Some(TEST_REPOSITORY.into()),
+                effective_url: format!("{}octocat/Hello-World.git", node.rewrite_base),
+                exit_code: 128,
+                duration_ms: 10,
+            })
+            .unwrap()
+            .unwrap();
+        let outcome = core.recheck_failed_node(&failed_node).unwrap();
+
+        assert_eq!(
+            outcome,
+            FailoverOutcome::FellBackToDirect {
+                from: "Unreachable".into()
+            }
+        );
+        let settings = core.settings().unwrap();
+        assert!(!settings.acceleration_enabled);
+        assert_eq!(settings.line_mode, LineMode::Direct);
+        assert_eq!(
+            core.health().unwrap()["unreachable"].status,
+            NodeStatus::Unavailable
+        );
+        assert!(fs::read_to_string(&core.paths.gitconfig)
+            .unwrap()
+            .contains("GitHub remains direct"));
     }
 
     #[test]
@@ -2996,17 +3529,19 @@ mod tests {
         assert!(!report.report_text.contains("secret"));
         assert!(!report.report_text.contains("hidden"));
 
-        core.record_usage(CompletedTrace {
-            occurred_at: Utc::now(),
-            command: "fetch".into(),
-            original_url: Some(
-                "https://user:secret@github.com/openai/codex.git?token=hidden".into(),
-            ),
-            effective_url: format!("{rewrite_base}openai/codex.git"),
-            exit_code: 0,
-            duration_ms: 42,
-        })
-        .unwrap();
+        let recheck = core
+            .observe_git_operation(CompletedTrace {
+                occurred_at: Utc::now(),
+                command: "fetch".into(),
+                original_url: Some(
+                    "https://user:secret@github.com/openai/codex.git?token=hidden".into(),
+                ),
+                effective_url: format!("{rewrite_base}openai/codex.git"),
+                exit_code: 0,
+                duration_ms: 42,
+            })
+            .unwrap();
+        assert!(recheck.is_none());
         let usage = core.usage_log().unwrap();
         assert_eq!(usage.events.len(), 1);
         assert_eq!(usage.events[0].route, UsageRoute::Accelerated);
