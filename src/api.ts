@@ -54,6 +54,11 @@ const browserUsageMock: UsageLogSnapshot = {
   storagePath: "~/Library/Application Support/pro.gitboost.desktop/logs/usage.jsonl",
 };
 
+const projectLinks = {
+  author: "https://github.com/DiscoverBox",
+  repository: "https://github.com/DiscoverBox/gitboost",
+} as const;
+
 function inTauri(): boolean {
   return "__TAURI_INTERNALS__" in window;
 }
@@ -92,4 +97,8 @@ export const api = {
   setUsageLogging: (enabled: boolean) => call<AppSnapshot>("set_usage_logging", { enabled }),
   prepareDownload: (originalUrl: string, excludedNodeIds: string[]) => call<DownloadTarget>("prepare_download", { originalUrl, excludedNodeIds }),
   openDownload: (originalUrl: string, nodeId: string) => call<DownloadTarget>("open_download", { originalUrl, nodeId }),
+  openProjectLink: async (target: keyof typeof projectLinks) => {
+    if (inTauri()) return call<void>("open_project_link", { target });
+    window.open(projectLinks[target], "_blank", "noopener,noreferrer");
+  },
 };

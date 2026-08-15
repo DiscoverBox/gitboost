@@ -323,6 +323,40 @@ test("uses the bright interface palette", async ({ page }) => {
   await expect(page.getByRole("navigation", { name: "主要导航" }).getByRole("button", { name: "总览" })).toHaveCSS("color", "rgb(255, 255, 255)");
 });
 
+test("open-source project links stay visible and open the expected GitHub pages", async ({ page }) => {
+  await page.addInitScript(() => {
+    const opened: string[] = [];
+    Object.assign(window, {
+      __openedProjectLinks: opened,
+      open: (url: string | URL) => {
+        opened.push(String(url));
+        return null;
+      },
+    });
+  });
+  await page.goto("/");
+
+  const author = page.getByRole("region", { name: "GitBoost 项目作者" });
+  const projectLink = page.getByRole("button", { name: "查看 GitBoost 项目" });
+  const navigation = page.getByRole("navigation", { name: "主要导航" });
+  const authorLabel = author.getByText("DiscoverBox", { exact: true });
+  await expect(authorLabel).toBeVisible();
+  await expect(author.getByText("github.com/DiscoverBox", { exact: true })).toBeVisible();
+  const [projectLinkBox, navigationBox] = await Promise.all([
+    projectLink.boundingBox(),
+    navigation.boundingBox(),
+  ]);
+  expect(projectLinkBox && projectLinkBox.y + projectLinkBox.height).toBeLessThanOrEqual(navigationBox?.y ?? 0);
+  await author.getByRole("button", { name: "DiscoverBox github.com/DiscoverBox" }).click();
+  await projectLink.click();
+
+  const opened = await page.evaluate(() => (window as typeof window & { __openedProjectLinks: string[] }).__openedProjectLinks);
+  expect(opened).toEqual([
+    "https://github.com/DiscoverBox",
+    "https://github.com/DiscoverBox/gitboost",
+  ]);
+});
+
 test("node import keeps failures open and reports actual results", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "设置", exact: true }).click();

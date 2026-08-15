@@ -36,15 +36,20 @@ pub fn prepare_target(original_url: &str, node: &NodeDefinition) -> Result<Downl
 
 pub fn probe_and_open(target: DownloadTarget) -> Result<DownloadTarget, String> {
     probe(&target)?;
-    let mut command = browser_command(&target.accelerated_url);
+    open_in_browser(&target.accelerated_url)?;
+    Ok(target)
+}
+
+pub fn open_in_browser(url: &str) -> Result<(), String> {
+    let mut command = browser_command(url);
     hide_console(&mut command);
     let status = command
         .status()
         .map_err(|error| format!("无法调用默认浏览器：{error}"))?;
     if !status.success() {
-        return Err("默认浏览器未能打开下载地址".into());
+        return Err("默认浏览器未能打开地址".into());
     }
-    Ok(target)
+    Ok(())
 }
 
 #[cfg(target_os = "macos")]

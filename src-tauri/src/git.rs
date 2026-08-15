@@ -739,7 +739,14 @@ mod tests {
             "[url \"https://new.example/https://github.com/openai/codex\"]\n\tinsteadOf = https://github.com/openai/codex\n",
         )
         .unwrap();
-        fs::write(&global, format!("[include]\n\tpath = {}\n", live.display())).unwrap();
+        fs::write(
+            &global,
+            format!(
+                "[include]\n\tpath = \"{}\"\n",
+                escape_subsection(&live.to_string_lossy())
+            ),
+        )
+        .unwrap();
 
         let original = "https://github.com/openai/codex.git";
         let (conflicted, _) =

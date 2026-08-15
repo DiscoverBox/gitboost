@@ -23,6 +23,14 @@ use tauri_plugin_autostart::MacosLauncher;
 
 type CommandResult<T> = Result<T, String>;
 
+fn project_link(target: &str) -> CommandResult<&'static str> {
+    match target {
+        "author" => Ok("https://github.com/DiscoverBox"),
+        "repository" => Ok("https://github.com/DiscoverBox/gitboost"),
+        _ => Err("未知的项目链接".into()),
+    }
+}
+
 struct TrayMenu<R: Runtime> {
     status: MenuItem<R>,
     toggle: MenuItem<R>,
@@ -304,6 +312,11 @@ async fn open_download(
         .map_err(|error| format!("下载探测任务异常结束：{error}"))?
 }
 
+#[tauri::command]
+fn open_project_link(target: String) -> CommandResult<()> {
+    downloads::open_in_browser(project_link(&target)?)
+}
+
 fn reveal_main(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.show();
@@ -511,6 +524,7 @@ pub fn run() {
             set_usage_logging,
             prepare_download,
             open_download,
+            open_project_link,
         ])
         .run(tauri::generate_context!())
         .expect("error while running GitBoost");
@@ -518,7 +532,7 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{health_check_due, run_node_test, tray_labels};
+    use super::{health_check_due, project_link, run_node_test, tray_labels};
     use crate::models::{HealthSummary, NodeDefinition, NodeEntry, Settings};
     use std::time::Duration;
 
@@ -559,6 +573,19 @@ mod tests {
             tray_labels(&disabled, &[node]),
             ("当前线路：GitHub 直连".into(), "开启加速")
         );
+    }
+
+    #[test]
+    fn project_links_are_fixed_to_the_author_and_repository() {
+        assert_eq!(
+            project_link("author").unwrap(),
+            "https://github.com/DiscoverBox"
+        );
+        assert_eq!(
+            project_link("repository").unwrap(),
+            "https://github.com/DiscoverBox/gitboost"
+        );
+        assert!(project_link("other").is_err());
     }
 
     #[test]

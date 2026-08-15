@@ -34,19 +34,31 @@ code { font-family: "SFMono-Regular", Menlo, monospace; font-size: 0.88em; }
 .window-drag { position: absolute; z-index: 20; top: 0; right: 0; left: 0; height: 29px; }
 .sidebar { display: flex; flex-direction: column; min-width: 0; padding: 54px 14px 18px; background: var(--sidebar); border-right: 1px solid #c7e4f7; }
 .app-shell--native-titlebar .sidebar { padding-top: 25px; }
-.brand-block { padding: 0 10px 29px; }
+.brand-block { padding: 0 0 21px; }
+.brand-project-link { width: 100%; padding: 0 10px 8px; border: 0; border-radius: 10px; background: transparent; text-align: left; cursor: pointer; transition: background 120ms ease; }
+.brand-project-link:hover { background: rgb(255 255 255 / 42%); }
+.brand-project-link:hover .wordmark { color: var(--accent); }
 .brand-lockup { display: flex; align-items: center; gap: 10px; }
 .brand-mark { flex: none; width: 34px; height: 34px; overflow: visible; }
 .brand-mark rect { fill: var(--accent); }
 .brand-mark path { fill: none; stroke: white; stroke-width: 2.15; stroke-linecap: round; stroke-linejoin: round; }
 .brand-mark circle { fill: #a9e5ff; stroke: white; stroke-width: 1.2; }
 .wordmark { color: var(--accent-strong); font-family: "Avenir Next", ui-rounded, sans-serif; font-size: 21px; font-weight: 700; letter-spacing: -0.025em; }
-.brand-tagline { display: block; margin: 7px 0 0 44px; color: #4d7088; font-size: 10px; letter-spacing: 0.06em; }
 .sidebar nav { display: grid; gap: 4px; }
 .sidebar nav button { width: 100%; padding: 9px 13px; border: 0; border-radius: 9px; background: transparent; color: #365a74; text-align: left; font-size: 13px; cursor: pointer; transition: background 120ms ease, color 120ms ease, box-shadow 120ms ease; }
 .sidebar nav button:hover { background: #d3ecfc; color: var(--accent-strong); }
 .sidebar nav button.is-active { background: var(--accent); color: white; font-weight: 650; box-shadow: 0 7px 18px rgb(19 119 204 / 23%); }
-.sidebar-status { display: grid; grid-template-columns: 38px 1fr; align-items: center; gap: 9px; margin: auto 7px 0; padding: 13px 8px; border-top: 1px solid #cce2f1; }
+.project-author { margin: auto 7px 0; padding: 13px 1px 12px; border-top: 1px solid #cce2f1; }
+.author-link { display: grid; grid-template-columns: 28px minmax(0, 1fr) 13px; align-items: center; width: 100%; padding: 0 6px 0 0; border: 0; background: transparent; color: var(--ink); text-align: left; cursor: pointer; }
+.author-link img { width: 28px; height: 28px; border-radius: 7px; object-fit: cover; }
+.author-link > span { min-width: 0; padding-left: 8px; }
+.author-link strong, .author-link small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.author-link strong { font-size: 10px; font-weight: 650; }
+.author-link small { margin-top: 2px; color: #57768d; font-size: 8px; }
+.author-link > svg { width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.author-link > svg { color: #62849c; }
+.author-link:hover strong { color: var(--accent-strong); }
+.sidebar-status { display: grid; grid-template-columns: 38px 1fr; align-items: center; gap: 9px; margin: 0 7px; padding: 13px 8px; border-top: 1px solid #cce2f1; }
 .sidebar-status strong, .sidebar-status small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sidebar-status strong { font-size: 11px; font-weight: 650; }
 .sidebar-status small { margin-top: 2px; color: var(--muted); font-size: 10px; }

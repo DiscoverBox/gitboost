@@ -32,6 +32,26 @@ function BrandLogo() {
   );
 }
 
+function ExternalLinkIcon() {
+  return (
+    <svg viewBox="0 0 16 16" aria-hidden="true">
+      <path d="M6 4h-2.5A1.5 1.5 0 0 0 2 5.5v7A1.5 1.5 0 0 0 3.5 14h7a1.5 1.5 0 0 0 1.5-1.5V10M9 2h5v5M14 2 7.5 8.5" />
+    </svg>
+  );
+}
+
+function ProjectAuthor({ onOpen }: { onOpen: () => void }) {
+  return (
+    <section className="project-author" aria-label="GitBoost 项目作者">
+      <button type="button" className="author-link" onClick={onOpen} title="打开项目作者主页">
+        <img src="/discoverbox.webp" alt="DiscoverBox" />
+        <span><strong>DiscoverBox</strong><small>github.com/DiscoverBox</small></span>
+        <ExternalLinkIcon />
+      </button>
+    </section>
+  );
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
@@ -117,6 +137,9 @@ export default function App() {
   const nodeTestRunning = nodeTestProgress !== null;
 
   const reload = useCallback(async () => setSnapshot(await getSnapshot()), []);
+  const openProjectLink = useCallback((target: "author" | "repository") => {
+    api.openProjectLink(target).catch((error) => setToast({ kind: "error", text: errorMessage(error) }));
+  }, []);
   useEffect(() => { reload().catch((error) => setToast({ kind: "error", text: errorMessage(error) })); }, [reload]);
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
@@ -160,12 +183,14 @@ export default function App() {
       {!usesNativeTitleBar && <div className="window-drag" data-tauri-drag-region />}
       <aside className="sidebar">
         <div className="brand-block">
-          <BrandLogo />
-          <span className="brand-tagline">GitHub 读取加速</span>
+          <button type="button" className="brand-project-link" onClick={() => openProjectLink("repository")} aria-label="查看 GitBoost 项目" title="https://github.com/DiscoverBox/gitboost">
+            <BrandLogo />
+          </button>
         </div>
         <nav aria-label="主要导航">
           {navItems.map((item) => <button key={item.key} className={page === item.key ? "is-active" : ""} onClick={() => setPage(item.key)}>{item.label}</button>)}
         </nav>
+        <ProjectAuthor onOpen={() => openProjectLink("author")} />
         <div className="sidebar-status">
           <div className="line-glyph" data-on={snapshot.settings.accelerationEnabled}><span /><span /><span /></div>
           <div><strong>{snapshot.settings.accelerationEnabled ? "加速已开启" : "当前为直连"}</strong><small>{lineStatusLabel(snapshot.settings.accelerationEnabled, snapshot.settings.lineMode)}</small></div>
