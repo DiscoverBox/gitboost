@@ -1,14 +1,11 @@
 export type PageKey = "overview" | "routes" | "downloads" | "usage" | "diagnostics" | "settings";
 export type RouteScope = "allowlist" | "global";
-export type LineMode = "automatic" | "fixed" | "direct";
 export type NodeStatus = "untested" | "available" | "slow" | "incompatible" | "unavailable";
 
 export interface Settings {
   schemaVersion: number;
   accelerationEnabled: boolean;
   routeScope: RouteScope;
-  lineMode: LineMode;
-  fixedNodeId: string | null;
   currentNodeId: string | null;
   healthCheckMinutes: number;
   launchAtLogin: boolean;

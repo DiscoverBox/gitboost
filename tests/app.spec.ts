@@ -6,6 +6,8 @@ test("core desktop workflow is navigable", async ({ page }) => {
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "使用 GitHub 原地址，按需加速" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "自动选择", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "直连", exact: true })).toBeVisible();
 
   const dragRegion = page.locator("[data-tauri-drag-region]");
   await expect(dragRegion).toBeVisible();
@@ -62,7 +64,7 @@ test("settings remain scrollable without showing a scrollbar", async ({ page }) 
 test("system node refresh reports whether the catalog changed", async ({ page }) => {
   await page.addInitScript(() => {
     const snapshot: AppSnapshot = {
-      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
+      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
       nodes: [{ id: "system", name: "system", rewriteBase: "https://proxy.example/https://github.com/", enabled: true, builtIn: true, health: { status: "untested", inAutoPool: false, successCount: 0, attemptCount: 0, medianLatencyMs: null, consecutiveFailures: 0, checkedAt: null, failureReason: null } }],
       routes: [],
       environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
@@ -91,7 +93,7 @@ test("file download can retry with the next available line", async ({ page }) =>
       { id: "node-two", name: "Node Two", rewriteBase: "https://two.example/https://github.com/", enabled: true, builtIn: false, health: { status: "slow", inAutoPool: true, successCount: 1, attemptCount: 1, medianLatencyMs: 80, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } },
     ];
     const snapshot: AppSnapshot = {
-      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: "node-one", healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
+      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
       nodes,
       routes: [],
       environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
@@ -135,13 +137,12 @@ test("file download can retry with the next available line", async ({ page }) =>
     { command: "prepare_download", args: { originalUrl: "https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip", excludedNodeIds: ["node-one"] } },
   ]);
   expect(calls.filter(({ command }) => command === "open_download").map(({ args }) => args.nodeId)).toEqual(["node-one", "node-two"]);
-  expect(calls.some(({ command }) => command === "set_line_mode")).toBe(false);
 });
 
 test("node detection shows usable-node target progress", async ({ page }) => {
   await page.addInitScript(() => {
     const snapshot: AppSnapshot = {
-      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
+      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
       nodes: [{ id: "system", name: "system", rewriteBase: "https://proxy.example/https://github.com/", enabled: true, builtIn: true, health: { status: "untested", inAutoPool: false, successCount: 0, attemptCount: 0, medianLatencyMs: null, consecutiveFailures: 0, checkedAt: null, failureReason: null } }],
       routes: [],
       environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
@@ -214,7 +215,7 @@ test("node detection shows usable-node target progress", async ({ page }) => {
 test("core workflow UI responds to command results", async ({ page }) => {
   await page.addInitScript(() => {
     const snapshot: AppSnapshot = {
-      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null as string | null },
+      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null as string | null },
       nodes: [{ id: "verified-node", name: "Verified Node", rewriteBase: "https://proxy.integration.test/https://github.com/", enabled: true, builtIn: false, health: { status: "available", inAutoPool: true, successCount: 2, attemptCount: 2, medianLatencyMs: 25, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } }],
       routes: [] as { id: string; repositoryUrl: string; createdAt: string }[],
       environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
@@ -236,23 +237,13 @@ test("core workflow UI responds to command results", async ({ page }) => {
         if (command === "set_acceleration") {
           if (args.enabled && snapshot.routes.length === 0) throw new Error("仅加速清单为空，请先加入至少一个公开仓库");
           snapshot.settings.accelerationEnabled = Boolean(args.enabled);
-          snapshot.settings.lineMode = args.enabled ? "automatic" : snapshot.settings.lineMode;
           snapshot.settings.currentNodeId = args.enabled ? "verified-node" : null;
           snapshot.settings.lastAppliedAt = "2026-08-14T00:00:01Z";
           snapshot.environment.includeRegistered = true;
           return copy();
         }
-        if (command === "set_line_mode") {
-          snapshot.settings.lineMode = String(args.mode) as "automatic" | "direct";
-          if (args.mode === "direct") {
-            snapshot.settings.accelerationEnabled = false;
-            snapshot.settings.currentNodeId = null;
-          }
-          return copy();
-        }
         if (command === "restore_git_config") {
           snapshot.settings.accelerationEnabled = false;
-          snapshot.settings.lineMode = "direct";
           snapshot.settings.currentNodeId = null;
           snapshot.environment.includeRegistered = false;
           return copy();
@@ -282,17 +273,23 @@ test("core workflow UI responds to command results", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "使用 GitHub 原地址，按需加速" })).toBeVisible();
   await expect(page.getByText("当前为直连", { exact: true })).toBeVisible();
 
+  await page.getByRole("button", { name: "自动选择", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "读取线路已接入" })).toBeVisible();
+  await expect(page.getByText("加速已开启", { exact: true })).toBeVisible();
+  await expect(page.locator(".toast")).toHaveText("已切换为自动选择，加速已开启");
+
   await page.getByRole("button", { name: "设置", exact: true }).click();
   await page.getByRole("button", { name: "恢复 Git 配置" }).click();
   await expect(page.locator(".toast")).toHaveText("GitBoost 配置已恢复为直连");
 
   const calls = await page.evaluate(() => (window as typeof window & { __workflowCalls: { command: string; args: Record<string, unknown> }[] }).__workflowCalls);
   expect(calls.filter(({ command }) => command === "get_snapshot").length).toBeGreaterThan(0);
-  expect(calls.filter(({ command }) => ["set_acceleration", "add_route", "set_line_mode", "restore_git_config"].includes(command))).toEqual([
+  expect(calls.filter(({ command }) => ["set_acceleration", "add_route", "restore_git_config"].includes(command))).toEqual([
     { command: "set_acceleration", args: { enabled: true } },
     { command: "add_route", args: { repositoryUrl: "openai/codex" } },
     { command: "set_acceleration", args: { enabled: true } },
-    { command: "set_line_mode", args: { mode: "direct", nodeId: null } },
+    { command: "set_acceleration", args: { enabled: false } },
+    { command: "set_acceleration", args: { enabled: true } },
     { command: "restore_git_config", args: {} },
   ]);
 });
@@ -364,7 +361,7 @@ test("node import keeps failures open and reports actual results", async ({ page
 
   await page.evaluate(() => {
     const snapshot: AppSnapshot = {
-      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
+      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
       nodes: [], routes: [],
       environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
     };
@@ -401,7 +398,7 @@ test("route list shows full addresses and filters existing repositories", async 
   const longUrl = "https://github.com/organization-with-a-very-long-name/repository-with-a-very-long-name.git";
   await page.evaluate((repositoryUrl) => {
     const snapshot: AppSnapshot = {
-      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", lineMode: "automatic", fixedNodeId: null, currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
+      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null },
       nodes: [],
       routes: [
         { id: "long", repositoryUrl, createdAt: "2026-08-13T00:00:00Z" },

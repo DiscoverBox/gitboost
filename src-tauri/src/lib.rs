@@ -212,18 +212,6 @@ fn set_acceleration(
 }
 
 #[tauri::command]
-fn set_line_mode(
-    app: tauri::AppHandle,
-    core: State<'_, AppCore>,
-    mode: LineMode,
-    node_id: Option<String>,
-) -> CommandResult<AppSnapshot> {
-    let snapshot = core.set_line_mode(mode, node_id.as_deref())?;
-    refresh_tray(&app, &snapshot);
-    Ok(snapshot)
-}
-
-#[tauri::command]
 fn set_route_scope(
     app: tauri::AppHandle,
     core: State<'_, AppCore>,
@@ -511,7 +499,6 @@ pub fn run() {
             set_node_enabled,
             delete_node,
             set_acceleration,
-            set_line_mode,
             set_route_scope,
             add_route,
             delete_route,
@@ -566,7 +553,6 @@ mod tests {
 
         let disabled = Settings {
             acceleration_enabled: false,
-            current_node_id: Some(node.node.id.clone()),
             ..Settings::default()
         };
         assert_eq!(

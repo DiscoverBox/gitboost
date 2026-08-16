@@ -12,8 +12,6 @@ pub struct Settings {
     pub schema_version: u32,
     pub acceleration_enabled: bool,
     pub route_scope: RouteScope,
-    pub line_mode: LineMode,
-    pub fixed_node_id: Option<String>,
     pub current_node_id: Option<String>,
     pub health_check_minutes: u32,
     pub launch_at_login: bool,
@@ -33,8 +31,6 @@ impl Default for Settings {
             schema_version: SCHEMA_VERSION,
             acceleration_enabled: false,
             route_scope: RouteScope::Allowlist,
-            line_mode: LineMode::Automatic,
-            fixed_node_id: None,
             current_node_id: None,
             health_check_minutes: DEFAULT_HEALTH_CHECK_MINUTES,
             launch_at_login: false,
@@ -50,14 +46,6 @@ impl Default for Settings {
 pub enum RouteScope {
     Allowlist,
     Global,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum LineMode {
-    Automatic,
-    Fixed,
-    Direct,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

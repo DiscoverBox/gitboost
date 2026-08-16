@@ -1,6 +1,5 @@
 use crate::models::{
-    HealthSummary, LineMode, NodeDefinition, NodeStatus, RouteEntry, RouteScope, Settings,
-    TEST_REPOSITORY,
+    HealthSummary, NodeDefinition, NodeStatus, RouteEntry, RouteScope, Settings, TEST_REPOSITORY,
 };
 use chrono::Utc;
 use std::{
@@ -217,8 +216,7 @@ pub fn build_config(
 ) -> Result<String, String> {
     let mut output =
         String::from("# Managed by GitBoost. Do not store credentials in this file.\n");
-    let needs_trace = settings.usage_logging_enabled
-        || (settings.acceleration_enabled && settings.line_mode == LineMode::Automatic);
+    let needs_trace = settings.usage_logging_enabled || settings.acceleration_enabled;
     if needs_trace {
         if let Some(socket) = trace_socket {
             let target = format!("af_unix:stream:{}", socket.display());
@@ -228,7 +226,7 @@ pub fn build_config(
             ));
         }
     }
-    if !settings.acceleration_enabled || settings.line_mode == LineMode::Direct {
+    if !settings.acceleration_enabled {
         output.push_str("# Acceleration is disabled; GitHub remains direct.\n");
         return Ok(output);
     }
@@ -796,34 +794,8 @@ mod tests {
     }
 
     #[test]
-    fn fixed_acceleration_without_usage_logging_does_not_configure_trace2() {
-        let node_id = node().id;
-        let settings = Settings {
-            acceleration_enabled: true,
-            usage_logging_enabled: false,
-            line_mode: LineMode::Fixed,
-            fixed_node_id: Some(node_id.clone()),
-            current_node_id: Some(node_id),
-            route_scope: RouteScope::Global,
-            ..Settings::default()
-        };
-
-        let config = build_config(
-            &settings,
-            Some(&node()),
-            &[],
-            Some(Path::new("/tmp/gitboost-trace.sock")),
-        )
-        .unwrap();
-
-        assert!(!config.contains("[trace2]"));
-    }
-
-    #[test]
     fn direct_config_has_no_rewrite() {
         let mut settings = Settings::default();
-        settings.acceleration_enabled = true;
-        settings.line_mode = LineMode::Direct;
         settings.usage_logging_enabled = false;
         assert_eq!(build_config(&settings, Some(&node()), &[], None).unwrap(), "# Managed by GitBoost. Do not store credentials in this file.\n# Acceleration is disabled; GitHub remains direct.\n");
     }

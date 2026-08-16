@@ -1,13 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSnapshot, DiagnosticReport, DownloadTarget, ImportResult, NodeEntry, RouteScope, LineMode, UsageLogSnapshot } from "./types";
+import type { AppSnapshot, DiagnosticReport, DownloadTarget, ImportResult, NodeEntry, RouteScope, UsageLogSnapshot } from "./types";
 
 const browserMock: AppSnapshot = {
   settings: {
     schemaVersion: 1,
     accelerationEnabled: false,
     routeScope: "allowlist",
-    lineMode: "automatic",
-    fixedNodeId: null,
     currentNodeId: null,
     healthCheckMinutes: 1440,
     launchAtLogin: false,
@@ -83,7 +81,6 @@ export const api = {
   setNodeEnabled: (nodeId: string, enabled: boolean) => call<AppSnapshot>("set_node_enabled", { nodeId, enabled }),
   deleteNode: (nodeId: string) => call<AppSnapshot>("delete_node", { nodeId }),
   setAcceleration: (enabled: boolean) => call<AppSnapshot>("set_acceleration", { enabled }),
-  setLineMode: (mode: LineMode, nodeId?: string | null) => call<AppSnapshot>("set_line_mode", { mode, nodeId }),
   setRouteScope: (scope: RouteScope) => call<AppSnapshot>("set_route_scope", { scope }),
   addRoute: (repositoryUrl: string) => call<AppSnapshot>("add_route", { repositoryUrl }),
   deleteRoute: (routeId: string) => call<AppSnapshot>("delete_route", { routeId }),

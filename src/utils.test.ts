@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatLatency, lineStatusLabel, statusLabel, successRate } from "./utils";
+import { formatLatency, statusLabel, successRate } from "./utils";
 
 describe("display utilities", () => {
   it("formats node timing without inventing data", () => {
@@ -14,12 +14,5 @@ describe("display utilities", () => {
 
   it("has explicit copy for every state", () => {
     expect(Object.keys(statusLabel)).toEqual(["untested", "available", "slow", "incompatible", "unavailable"]);
-  });
-
-  it("distinguishes automatic, fixed, and direct lines", () => {
-    expect(lineStatusLabel(true, "automatic")).toBe("自动线路");
-    expect(lineStatusLabel(true, "fixed")).toBe("固定线路");
-    expect(lineStatusLabel(true, "direct")).toBe("GitHub");
-    expect(lineStatusLabel(false, "direct")).toBe("GitHub");
   });
 });

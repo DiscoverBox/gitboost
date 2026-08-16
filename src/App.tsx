@@ -3,8 +3,8 @@ import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
 import { api, getSnapshot } from "./api";
-import type { AppSnapshot, DiagnosticReport, DownloadTarget, ImportResult, LineMode, NodeEntry, NodeTestProgress, PageKey, RouteScope, UsageLogSnapshot } from "./types";
-import { currentNode, formatLatency, formatRelativeTime, lineStatusLabel, statusLabel, statusTone, successRate } from "./utils";
+import type { AppSnapshot, DiagnosticReport, DownloadTarget, ImportResult, NodeEntry, NodeTestProgress, PageKey, RouteScope, UsageLogSnapshot } from "./types";
+import { currentNode, formatLatency, formatRelativeTime, statusLabel, statusTone, successRate } from "./utils";
 
 const navItems: { key: PageKey; label: string }[] = [
   { key: "overview", label: "总览" },
@@ -86,11 +86,11 @@ function Switch({ checked, onChange, label }: { checked: boolean; onChange: (che
   );
 }
 
-function Segmented<T extends string>({ value, options, onChange }: { value: T; options: { value: T; label: string }[]; onChange: (value: T) => void }) {
+function Segmented<T extends string>({ value, options, onChange, disabled = false }: { value: T; options: readonly { value: T; label: string }[]; onChange: (value: T) => void; disabled?: boolean }) {
   return (
-    <div className="segmented">
+    <div className="segmented" aria-busy={disabled || undefined}>
       {options.map((option) => (
-        <button key={option.value} className={value === option.value ? "is-active" : ""} onClick={() => onChange(option.value)}>
+        <button key={option.value} disabled={disabled} className={value === option.value ? "is-active" : ""} onClick={() => onChange(option.value)}>
           {option.label}
         </button>
       ))}
@@ -193,7 +193,7 @@ export default function App() {
         <ProjectAuthor onOpen={() => openProjectLink("author")} />
         <div className="sidebar-status">
           <div className="line-glyph" data-on={snapshot.settings.accelerationEnabled}><span /><span /><span /></div>
-          <div><strong>{snapshot.settings.accelerationEnabled ? "加速已开启" : "当前为直连"}</strong><small>{lineStatusLabel(snapshot.settings.accelerationEnabled, snapshot.settings.lineMode)}</small></div>
+          <div><strong>{snapshot.settings.accelerationEnabled ? "加速已开启" : "当前为直连"}</strong><small>{snapshot.settings.accelerationEnabled ? "自动线路" : "GitHub"}</small></div>
         </div>
       </aside>
       <main className="main-content">
@@ -215,15 +215,14 @@ type Runner = <T>(key: string, operation: () => Promise<T>, message?: string | (
 function Overview({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, go }: { snapshot: AppSnapshot; busy: string | null; nodeTestProgress: NodeTestProgress | null; nodeTestRunning: boolean; run: Runner; go: (page: PageKey) => void }) {
   const node = currentNode(snapshot.nodes, snapshot.settings.currentNodeId);
   const usable = snapshot.nodes.filter((item) => item.enabled && item.health.inAutoPool && ["available", "slow"].includes(item.health.status));
-  const lineModeOptions: { value: LineMode; label: string }[] = [
+  const lineOptions = [
     { value: "automatic", label: "自动选择" },
-    ...(snapshot.settings.lineMode === "fixed" ? [{ value: "fixed" as const, label: "固定节点" }] : []),
     { value: "direct", label: "直连" },
-  ];
+  ] as const;
   const toggle = () => run("toggle", () => api.setAcceleration(!snapshot.settings.accelerationEnabled), snapshot.settings.accelerationEnabled ? "已恢复 GitHub 直连" : "加速配置已写入并验证").catch(() => undefined);
   return (
     <div className="page">
-      <PageHeader eyebrow="运行状态" title={snapshot.settings.accelerationEnabled ? "读取线路已接入" : "使用 GitHub 原地址，按需加速"} description="GitBoost 只改写公开仓库的读取地址；仓库中保存的 origin 保持不变。" actions={<Button tone={snapshot.settings.accelerationEnabled ? "secondary" : "primary"} busy={busy === "toggle"} onClick={toggle}>{snapshot.settings.accelerationEnabled ? "关闭加速" : "开启加速"}</Button>} />
+      <PageHeader eyebrow="运行状态" title={snapshot.settings.accelerationEnabled ? "读取线路已接入" : "使用 GitHub 原地址，按需加速"} description="GitBoost 只改写公开仓库的读取地址；仓库中保存的 origin 保持不变。" actions={<Button tone={snapshot.settings.accelerationEnabled ? "secondary" : "primary"} busy={busy === "toggle"} disabled={busy === "line-mode"} onClick={toggle}>{snapshot.settings.accelerationEnabled ? "关闭加速" : "开启加速"}</Button>} />
 
       <section className="status-board">
         <div className="status-primary">
@@ -232,7 +231,7 @@ function Overview({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, go }
         </div>
         <dl className="status-facts">
           <div><dt>路由范围</dt><dd>{snapshot.settings.routeScope === "allowlist" ? "仅加速清单" : "全局加速"}</dd></div>
-          <div><dt>线路模式</dt><dd>{snapshot.settings.lineMode === "automatic" ? "自动选择" : snapshot.settings.lineMode === "fixed" ? "固定节点" : "GitHub 直连"}</dd></div>
+          <div><dt>线路模式</dt><dd>{snapshot.settings.accelerationEnabled ? "自动选择" : "GitHub 直连"}</dd></div>
           <div><dt>连接质量</dt><dd>{node ? `${statusLabel[node.health.status]} · ${formatLatency(node.health.medianLatencyMs)}` : "尚未选路"}</dd></div>
           <div><dt>最近检测</dt><dd>{node ? formatRelativeTime(node.health.checkedAt) : "尚未检测"}</dd></div>
         </dl>
@@ -247,7 +246,7 @@ function Overview({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, go }
         <NodeTestProgressLine progress={nodeTestProgress} />
         <div className="control-row">
           <label>线路模式</label>
-          <Segmented<LineMode> value={snapshot.settings.lineMode} options={lineModeOptions} onChange={(mode) => run("line-mode", () => api.setLineMode(mode, mode === "fixed" ? snapshot.settings.fixedNodeId : null), "线路模式已更新").catch(() => undefined)} />
+          <Segmented value={snapshot.settings.accelerationEnabled ? "automatic" : "direct"} options={lineOptions} disabled={busy === "line-mode" || busy === "toggle"} onChange={(mode) => run("line-mode", () => api.setAcceleration(mode === "automatic"), mode === "automatic" ? "已切换为自动选择，加速已开启" : "已关闭加速，当前使用 GitHub 直连").catch(() => undefined)} />
         </div>
       </section>
 
@@ -303,11 +302,10 @@ function CustomNodeSettings({ snapshot, busy, nodeTestProgress, nodeTestRunning,
 
 function ManageNode({ node, busy, run, onClose }: { node: NodeEntry; busy: string | null; run: Runner; onClose: () => void }) {
   const [name, setName] = useState(node.name);
-  const usable = node.enabled && (node.health.status === "available" || node.health.status === "slow");
   return (
     <Modal title="管理节点" onClose={onClose}>
       <div className="modal-body"><label className="field"><span>名称</span><input value={name} onChange={(event) => setName(event.target.value)} /></label><div className="readonly-field"><span>重写前缀</span><code>{node.rewriteBase}</code></div><div className="setting-row"><div><strong>允许加入自动线路池</strong><p>停用后保留检测记录，但不会进入自动线路池。</p></div><Switch label="允许加入自动线路池" checked={node.enabled} onChange={(enabled) => run("node-enable", () => api.setNodeEnabled(node.id, enabled), enabled ? "节点已启用" : "节点已停用").catch(() => undefined)} /></div></div>
-      <footer className="modal-footer"><Button tone="danger" onClick={() => run("node-delete", () => api.deleteNode(node.id), "节点已删除").then(onClose).catch(() => undefined)}>删除</Button><Button disabled={!usable} onClick={() => run("node-fix", () => api.setLineMode("fixed", node.id), `已固定到 ${node.name}`).then(onClose).catch(() => undefined)}>{usable ? "固定此节点" : "检测通过后可固定"}</Button><span /><Button onClick={onClose}>取消</Button><Button tone="primary" busy={busy === "node-save"} disabled={!name.trim()} onClick={() => run("node-save", () => api.renameNode(node.id, name.trim()), "名称已保存").then(onClose).catch(() => undefined)}>保存</Button></footer>
+      <footer className="modal-footer"><Button tone="danger" onClick={() => run("node-delete", () => api.deleteNode(node.id), "节点已删除").then(onClose).catch(() => undefined)}>删除</Button><span /><Button onClick={onClose}>取消</Button><Button tone="primary" busy={busy === "node-save"} disabled={!name.trim()} onClick={() => run("node-save", () => api.renameNode(node.id, name.trim()), "名称已保存").then(onClose).catch(() => undefined)}>保存</Button></footer>
     </Modal>
   );
 }

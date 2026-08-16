@@ -276,15 +276,6 @@ impl AppCore {
         let mut health = original_health.clone();
         health.retain(|node_id, _| available_ids.contains(node_id));
         let mut settings_changed = false;
-        if settings
-            .fixed_node_id
-            .as_ref()
-            .is_some_and(|id| !available_ids.contains(id))
-        {
-            settings.fixed_node_id = None;
-            settings.line_mode = LineMode::Automatic;
-            settings_changed = true;
-        }
         let current_removed = settings
             .current_node_id
             .as_ref()
@@ -300,7 +291,6 @@ impl AppCore {
         let registered_before = should_resume && git::include_registered(&self.paths.gitconfig);
         if should_resume {
             settings.acceleration_enabled = false;
-            settings.line_mode = LineMode::Direct;
             self.write_configuration(&mut settings, &[], &[])?;
         }
         let persist_result = (|| {
@@ -603,10 +593,7 @@ impl AppCore {
         };
 
         let before = self.settings()?;
-        if !before.acceleration_enabled
-            || before.line_mode != LineMode::Automatic
-            || before.current_node_id.as_deref() != Some(node_id)
-        {
+        if !before.acceleration_enabled || before.current_node_id.as_deref() != Some(node_id) {
             return Ok(FailoverOutcome::Skipped);
         }
         *self.full_node_test_result.lock() = None;
@@ -621,9 +608,7 @@ impl AppCore {
         let after = {
             let _guard = self.lock.lock();
             let current = self.settings()?;
-            if !current.acceleration_enabled
-                || current.line_mode != LineMode::Automatic
-                || current.current_node_id.as_deref() != Some(node_id)
+            if !current.acceleration_enabled || current.current_node_id.as_deref() != Some(node_id)
             {
                 return Ok(FailoverOutcome::Skipped);
             }
@@ -650,9 +635,9 @@ impl AppCore {
                     .unwrap_or_else(|| "其他可用线路".into());
                 FailoverOutcome::Switched { from, to }
             }
-            None if after.as_ref().is_some_and(|settings| {
-                !settings.acceleration_enabled || settings.line_mode == LineMode::Direct
-            }) =>
+            None if after
+                .as_ref()
+                .is_some_and(|settings| !settings.acceleration_enabled) =>
             {
                 FailoverOutcome::FellBackToDirect { from }
             }
@@ -821,7 +806,6 @@ impl AppCore {
         let _guard = self.lock.lock();
         let mut settings = self.settings()?;
         if settings.acceleration_enabled
-            || settings.line_mode != LineMode::Direct
             || settings.last_applied_at.as_ref() != Some(expected_applied_at)
         {
             return Ok(());
@@ -830,8 +814,6 @@ impl AppCore {
         let Some(node) = git::choose_node(&pairs) else {
             return Ok(());
         };
-        settings.line_mode = LineMode::Automatic;
-        settings.fixed_node_id = None;
         settings.current_node_id = Some(node.id.clone());
         settings.acceleration_enabled = true;
         self.write_configuration(&mut settings, &pairs, &self.routes()?)
@@ -839,18 +821,13 @@ impl AppCore {
 
     fn reselect_after_health_change(&self) -> Result<(), String> {
         let mut settings = self.settings()?;
-        if settings.line_mode == LineMode::Automatic {
+        if settings.acceleration_enabled {
             let pairs = self.node_pairs()?;
             settings.current_node_id = git::choose_node(&pairs).map(|node| node.id.clone());
-            if settings.acceleration_enabled && settings.current_node_id.is_none() {
-                settings.line_mode = LineMode::Direct;
+            if settings.current_node_id.is_none() {
                 settings.acceleration_enabled = false;
-                self.write_configuration(&mut settings, &pairs, &self.routes()?)?;
-            } else if settings.acceleration_enabled {
-                self.write_configuration(&mut settings, &pairs, &self.routes()?)?;
-            } else {
-                atomic_write_json(&self.paths.settings, &settings)?;
             }
+            self.write_configuration(&mut settings, &pairs, &self.routes()?)?;
         }
         Ok(())
     }
@@ -898,10 +875,6 @@ impl AppCore {
             }
         }
         let mut settings = self.settings()?;
-        if !enabled && settings.fixed_node_id.as_deref() == Some(node_id) {
-            settings.fixed_node_id = None;
-            settings.line_mode = LineMode::Automatic;
-        }
         if !enabled && settings.current_node_id.as_deref() == Some(node_id) {
             settings.current_node_id = None;
         }
@@ -923,10 +896,6 @@ impl AppCore {
         let mut health = self.health()?;
         health.remove(node_id);
         let mut settings = self.settings()?;
-        if settings.fixed_node_id.as_deref() == Some(node_id) {
-            settings.fixed_node_id = None;
-            settings.line_mode = LineMode::Automatic;
-        }
         if settings.current_node_id.as_deref() == Some(node_id) {
             settings.current_node_id = None;
         }
@@ -947,49 +916,15 @@ impl AppCore {
         if enabled && settings.route_scope == RouteScope::Allowlist && self.routes()?.is_empty() {
             return Err("仅加速清单为空，请先加入至少一个公开仓库".into());
         }
-        if enabled && settings.line_mode == LineMode::Direct {
-            settings.line_mode = LineMode::Automatic;
+        if enabled {
+            settings.acceleration_enabled = true;
+        } else {
+            settings.current_node_id = None;
+            settings.acceleration_enabled = false;
         }
-        settings.acceleration_enabled = enabled;
         let pairs = self.node_pairs()?;
         if enabled {
             self.select_current(&mut settings, &pairs)?;
-        }
-        self.write_configuration(&mut settings, &pairs, &self.routes()?)?;
-        self.snapshot()
-    }
-
-    pub fn set_line_mode(
-        &self,
-        mode: LineMode,
-        node_id: Option<&str>,
-    ) -> Result<AppSnapshot, String> {
-        let _guard = self.lock.lock();
-        let mut settings = self.settings()?;
-        let pairs = self.node_pairs()?;
-        settings.line_mode = mode;
-        match mode {
-            LineMode::Fixed => {
-                let id = node_id.ok_or_else(|| "固定模式需要选择节点".to_string())?;
-                let usable = pairs.iter().any(|(node, health)| {
-                    node.id == id
-                        && node.enabled
-                        && matches!(health.status, NodeStatus::Available | NodeStatus::Slow)
-                });
-                if !usable {
-                    return Err("只能固定到已通过检测的节点".into());
-                }
-                settings.fixed_node_id = Some(id.into());
-                settings.current_node_id = Some(id.into());
-            }
-            LineMode::Automatic => {
-                settings.fixed_node_id = None;
-                self.select_current(&mut settings, &pairs)?;
-            }
-            LineMode::Direct => {
-                settings.current_node_id = None;
-                settings.acceleration_enabled = false;
-            }
         }
         self.write_configuration(&mut settings, &pairs, &self.routes()?)?;
         self.snapshot()
@@ -1000,22 +935,8 @@ impl AppCore {
         settings: &mut Settings,
         pairs: &[(NodeDefinition, HealthSummary)],
     ) -> Result<(), String> {
-        settings.current_node_id = match settings.line_mode {
-            LineMode::Automatic => git::choose_node(pairs).map(|node| node.id.clone()),
-            LineMode::Fixed => settings.fixed_node_id.as_ref().and_then(|fixed_id| {
-                pairs
-                    .iter()
-                    .find(|(node, health)| {
-                        &node.id == fixed_id && node.enabled && is_usable_health(health)
-                    })
-                    .map(|(node, _)| node.id.clone())
-            }),
-            LineMode::Direct => None,
-        };
-        if settings.acceleration_enabled
-            && settings.line_mode != LineMode::Direct
-            && settings.current_node_id.is_none()
-        {
+        settings.current_node_id = git::choose_node(pairs).map(|node| node.id.clone());
+        if settings.current_node_id.is_none() {
             return Err("没有通过真实 Git 检测的可用节点".into());
         }
         Ok(())
@@ -1028,6 +949,7 @@ impl AppCore {
         settings.route_scope = scope;
         if scope == RouteScope::Allowlist && settings.acceleration_enabled && routes.is_empty() {
             settings.acceleration_enabled = false;
+            settings.current_node_id = None;
         }
         let pairs = self.node_pairs()?;
         self.write_configuration(&mut settings, &pairs, &routes)?;
@@ -1075,6 +997,7 @@ impl AppCore {
         let mut settings = self.settings()?;
         if settings.route_scope == RouteScope::Allowlist && routes.is_empty() {
             settings.acceleration_enabled = false;
+            settings.current_node_id = None;
         }
         let pairs = self.node_pairs()?;
         atomic_write_json(&self.paths.routes, &routes)?;
@@ -1098,7 +1021,7 @@ impl AppCore {
                     if &node.id != id || !node.enabled || !is_usable_health(health) {
                         return false;
                     }
-                    settings.line_mode != LineMode::Automatic || health.in_auto_pool
+                    health.in_auto_pool
                 })
                 .map(|(node, _)| node)
         });
@@ -1106,7 +1029,7 @@ impl AppCore {
             git::build_config(settings, selected, routes, Some(&self.paths.trace_socket))?;
         let previous = fs::read(&self.paths.gitconfig).ok();
         let registered_before = git::include_registered(&self.paths.gitconfig);
-        if settings.acceleration_enabled && settings.line_mode != LineMode::Direct {
+        if settings.acceleration_enabled {
             let mut candidate = NamedTempFile::new_in(&self.paths.root)
                 .map_err(|error| format!("无法创建配置候选文件：{error}"))?;
             std::io::Write::write_all(&mut candidate, content.as_bytes())
@@ -1135,7 +1058,7 @@ impl AppCore {
                 return Err(error);
             }
         }
-        if settings.acceleration_enabled && settings.line_mode != LineMode::Direct {
+        if settings.acceleration_enabled {
             if let Err(error) = validate_configuration(
                 &self.paths.gitconfig,
                 settings,
@@ -1156,8 +1079,8 @@ impl AppCore {
             &self.paths.logs,
             "INFO",
             &format!(
-                "git configuration applied: enabled={}, scope={:?}, mode={:?}",
-                settings.acceleration_enabled, settings.route_scope, settings.line_mode
+                "git configuration applied: enabled={}, scope={:?}",
+                settings.acceleration_enabled, settings.route_scope
             ),
         );
         Ok(())
@@ -1226,9 +1149,15 @@ impl AppCore {
             && routes.is_empty();
         if repaired_empty_allowlist {
             settings.acceleration_enabled = false;
+            settings.current_node_id = None;
+        }
+        let repaired_disabled_state =
+            !settings.acceleration_enabled && settings.current_node_id.is_some();
+        if repaired_disabled_state {
+            settings.current_node_id = None;
         }
         if !registered && !settings.acceleration_enabled {
-            if repaired_empty_allowlist {
+            if repaired_empty_allowlist || repaired_disabled_state {
                 atomic_write_json(&self.paths.settings, &settings)?;
             }
             return Ok(());
@@ -1236,8 +1165,6 @@ impl AppCore {
         let pairs = self.node_pairs()?;
         if settings.acceleration_enabled && self.select_current(&mut settings, &pairs).is_err() {
             settings.acceleration_enabled = false;
-            settings.line_mode = LineMode::Direct;
-            settings.fixed_node_id = None;
             settings.current_node_id = None;
         }
         self.write_configuration(&mut settings, &pairs, &routes)?;
@@ -1248,7 +1175,6 @@ impl AppCore {
         let _guard = self.lock.lock();
         let mut settings = self.settings()?;
         settings.acceleration_enabled = false;
-        settings.line_mode = LineMode::Direct;
         settings.current_node_id = None;
         let content = git::build_config(&settings, None, &[], Some(&self.paths.trace_socket))?;
         let previous = fs::read(&self.paths.gitconfig).ok();
@@ -1308,7 +1234,6 @@ impl AppCore {
                 trace.exit_code != 0
                     && supports_automatic_failover(&trace.command)
                     && settings.acceleration_enabled
-                    && settings.line_mode == LineMode::Automatic
                     && settings.current_node_id.as_deref() == Some(node.id.as_str())
             })
             .map(|node| node.id.clone());
@@ -1862,7 +1787,6 @@ mod tests {
         let settings = Settings {
             acceleration_enabled: true,
             route_scope: RouteScope::Global,
-            line_mode: LineMode::Automatic,
             current_node_id: Some(current_node_id.into()),
             usage_logging_enabled: false,
             ..Settings::default()
@@ -1895,6 +1819,7 @@ mod tests {
             DEFAULT_HEALTH_CHECK_MINUTES
         );
         assert!(!snapshot.settings.acceleration_enabled);
+        assert!(snapshot.settings.current_node_id.is_none());
         assert!(snapshot.nodes[0].node.built_in);
         assert_eq!(snapshot.nodes[0].node.id, FASTGIT_REWRITE_BASE);
         let cached: Vec<String> = load_json(&directory.path().join("system-nodes.json")).unwrap();
@@ -2000,8 +1925,6 @@ mod tests {
         let settings = Settings {
             acceleration_enabled: true,
             route_scope: RouteScope::Allowlist,
-            line_mode: LineMode::Fixed,
-            fixed_node_id: Some(node.id.clone()),
             current_node_id: Some(node.id.clone()),
             ..Settings::default()
         };
@@ -2074,8 +1997,6 @@ mod tests {
         };
         let settings = Settings {
             acceleration_enabled: true,
-            line_mode: LineMode::Fixed,
-            fixed_node_id: Some(replacement.id.clone()),
             current_node_id: Some(replacement.id.clone()),
             ..Settings::default()
         };
@@ -2087,6 +2008,7 @@ mod tests {
                 replacement.id.clone(),
                 HealthSummary {
                     status: NodeStatus::Available,
+                    in_auto_pool: true,
                     success_count: 1,
                     attempt_count: 1,
                     ..HealthSummary::default()
@@ -2099,8 +2021,6 @@ mod tests {
         let old_config = git::build_config(
             &Settings {
                 acceleration_enabled: true,
-                line_mode: LineMode::Fixed,
-                fixed_node_id: Some(FASTGIT_REWRITE_BASE.into()),
                 current_node_id: Some(FASTGIT_REWRITE_BASE.into()),
                 ..Settings::default()
             },
@@ -2266,8 +2186,6 @@ mod tests {
         let settings = Settings {
             acceleration_enabled: true,
             route_scope: RouteScope::Global,
-            line_mode: LineMode::Fixed,
-            fixed_node_id: Some(FASTGIT_REWRITE_BASE.into()),
             current_node_id: Some(FASTGIT_REWRITE_BASE.into()),
             ..Settings::default()
         };
@@ -2295,14 +2213,12 @@ mod tests {
         assert_eq!(push, TEST_REPOSITORY);
         let persisted = core.settings().unwrap();
         assert!(!persisted.acceleration_enabled);
-        assert_eq!(persisted.line_mode, LineMode::Direct);
-        assert!(persisted.fixed_node_id.is_none());
         assert!(persisted.current_node_id.is_none());
 
         drop(core);
         let restarted = AppCore::new(directory.path().to_path_buf()).unwrap();
         restarted.refresh_registered_configuration().unwrap();
-        assert_eq!(restarted.settings().unwrap().line_mode, LineMode::Direct);
+        assert!(!restarted.settings().unwrap().acceleration_enabled);
     }
 
     #[test]
@@ -2319,8 +2235,6 @@ mod tests {
         let settings = Settings {
             acceleration_enabled: true,
             route_scope: RouteScope::Global,
-            line_mode: LineMode::Fixed,
-            fixed_node_id: Some(FASTGIT_REWRITE_BASE.into()),
             current_node_id: Some(FASTGIT_REWRITE_BASE.into()),
             ..Settings::default()
         };
@@ -2349,7 +2263,6 @@ mod tests {
         assert!(changed);
         let persisted = core.settings().unwrap();
         assert!(persisted.acceleration_enabled);
-        assert_eq!(persisted.line_mode, LineMode::Automatic);
         assert_eq!(
             persisted.current_node_id.as_deref(),
             Some("https://proxy.example/https://github.com/")
@@ -2466,8 +2379,6 @@ mod tests {
         let settings = Settings {
             acceleration_enabled: true,
             route_scope: RouteScope::Global,
-            line_mode: LineMode::Fixed,
-            fixed_node_id: Some(FASTGIT_REWRITE_BASE.into()),
             current_node_id: Some(FASTGIT_REWRITE_BASE.into()),
             ..Settings::default()
         };
@@ -2504,7 +2415,6 @@ mod tests {
 
         let persisted = core.settings().unwrap();
         assert!(!persisted.acceleration_enabled);
-        assert_eq!(persisted.line_mode, LineMode::Direct);
         assert!(persisted.current_node_id.is_none());
     }
 
@@ -2852,15 +2762,90 @@ mod tests {
     }
 
     #[test]
-    fn automatic_mode_can_be_selected_before_nodes_are_verified() {
+    fn automatic_selection_requires_verified_nodes() {
         let directory = tempfile::tempdir().unwrap();
         let core = AppCore::new(directory.path().to_path_buf()).unwrap();
         let pairs = vec![(NodeDefinition::fastgit(), HealthSummary::default())];
         let mut settings = Settings::default();
-        core.select_current(&mut settings, &pairs).unwrap();
-        assert!(settings.current_node_id.is_none());
-        settings.acceleration_enabled = true;
         assert!(core.select_current(&mut settings, &pairs).is_err());
+        assert!(settings.current_node_id.is_none());
+    }
+
+    #[test]
+    fn acceleration_control_keeps_selection_in_sync() {
+        const MARKER: &str = "GITBOOST_LINE_CONTROL_STATE_CHILD";
+        if rerun_with_isolated_git(
+            "core::tests::acceleration_control_keeps_selection_in_sync",
+            MARKER,
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        core.add_route("openai/codex").unwrap();
+
+        assert_eq!(
+            core.set_acceleration(true).unwrap_err(),
+            "没有通过真实 Git 检测的可用节点"
+        );
+        let unchanged = core.settings().unwrap();
+        assert!(!unchanged.acceleration_enabled);
+        assert!(unchanged.current_node_id.is_none());
+
+        atomic_write_json(
+            &core.paths.health,
+            &HashMap::from([(
+                FASTGIT_REWRITE_BASE.to_string(),
+                HealthSummary {
+                    status: NodeStatus::Available,
+                    in_auto_pool: true,
+                    success_count: 1,
+                    attempt_count: 1,
+                    ..HealthSummary::default()
+                },
+            )]),
+        )
+        .unwrap();
+
+        let automatic = core.set_acceleration(true).unwrap();
+        assert!(automatic.settings.acceleration_enabled);
+        assert_eq!(
+            automatic.settings.current_node_id.as_deref(),
+            Some(FASTGIT_REWRITE_BASE)
+        );
+
+        let direct = core.set_acceleration(false).unwrap();
+        assert!(!direct.settings.acceleration_enabled);
+        assert!(direct.settings.current_node_id.is_none());
+
+        core.set_acceleration(true).unwrap();
+        let route_id = core.routes().unwrap()[0].id.clone();
+        let empty_allowlist = core.delete_route(&route_id).unwrap();
+        assert!(!empty_allowlist.settings.acceleration_enabled);
+        assert!(empty_allowlist.settings.current_node_id.is_none());
+
+        core.set_route_scope(RouteScope::Global).unwrap();
+        core.set_acceleration(true).unwrap();
+        let restored_allowlist = core.set_route_scope(RouteScope::Allowlist).unwrap();
+        assert!(!restored_allowlist.settings.acceleration_enabled);
+        assert!(restored_allowlist.settings.current_node_id.is_none());
+    }
+
+    #[test]
+    fn startup_clears_a_stale_selection_while_disabled() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let inconsistent = Settings {
+            current_node_id: Some(FASTGIT_REWRITE_BASE.into()),
+            ..Settings::default()
+        };
+        atomic_write_json(&core.paths.settings, &inconsistent).unwrap();
+
+        core.refresh_registered_configuration().unwrap();
+
+        let normalized = core.settings().unwrap();
+        assert!(!normalized.acceleration_enabled);
+        assert!(normalized.current_node_id.is_none());
     }
 
     #[test]
@@ -2901,6 +2886,8 @@ mod tests {
         }
         atomic_write_json(&core.paths.health, &health).unwrap();
         let settings = Settings {
+            acceleration_enabled: true,
+            route_scope: RouteScope::Global,
             current_node_id: Some(first.id.clone()),
             ..Settings::default()
         };
@@ -2988,7 +2975,7 @@ mod tests {
     }
 
     #[test]
-    fn failure_observation_ignores_success_push_direct_and_fixed_mode() {
+    fn failure_observation_ignores_success_push_and_direct_routes() {
         let directory = tempfile::tempdir().unwrap();
         let core = AppCore::new(directory.path().to_path_buf()).unwrap();
         let node = custom_node(
@@ -3026,19 +3013,6 @@ mod tests {
             .observe_git_operation(trace(
                 "clone",
                 "https://github.com/openai/codex.git".into(),
-                128,
-            ))
-            .unwrap()
-            .is_none());
-
-        let mut settings = core.settings().unwrap();
-        settings.line_mode = LineMode::Fixed;
-        settings.fixed_node_id = Some(node.id.clone());
-        atomic_write_json(&core.paths.settings, &settings).unwrap();
-        assert!(core
-            .observe_git_operation(trace(
-                "clone",
-                format!("{}openai/codex.git", node.rewrite_base),
                 128,
             ))
             .unwrap()
@@ -3329,7 +3303,6 @@ mod tests {
         );
         let settings = core.settings().unwrap();
         assert!(!settings.acceleration_enabled);
-        assert_eq!(settings.line_mode, LineMode::Direct);
         assert_eq!(
             core.health().unwrap()["unreachable"].status,
             NodeStatus::Unavailable
@@ -3605,7 +3578,6 @@ mod tests {
 
         let restored = core.restore_git_config().unwrap();
         assert!(!restored.settings.acceleration_enabled);
-        assert_eq!(restored.settings.line_mode, LineMode::Direct);
         assert!(!restored.environment.include_registered);
         assert_eq!(
             git(repository.path(), &["remote", "get-url", "origin"]),
