@@ -66,6 +66,22 @@ npm run build:windows
 
 Windows 需要先安装 Git for Windows。安装包默认按当前用户安装；WebView2 缺失时由安装器静默引导安装。产物位于 `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/`。
 
+## 版本与发布
+
+`package.json` 是应用版本的唯一来源，Tauri 安装包和设置页都会读取这个版本。开始新的开发版本时运行：
+
+```bash
+npm run version:set -- 0.3.0-dev.0
+```
+
+正式发布必须在已与 `origin/main` 同步的干净 `main` 分支上运行：
+
+```bash
+npm run release -- 0.3.0
+```
+
+发布命令会把应用版本更新为稳定版本，创建版本提交和 annotated tag，并原子推送 `main` 与 tag。tag 推送后，GitHub Actions 会再次校验 tag 与 `package.json` 一致，再构建 Draft Release。已有 tag 不会被覆盖或移动。
+
 系统节点目录源文件为仓库根目录的 `nodes.enc.json`，主发布地址为 `https://cdn.jsdelivr.net/gh/DiscoverBox/gitboost@main/nodes.enc.json`，不可用时依次回退到 JSDMirror、Bili33 CDN 和 JSDMirror.com。文件使用 AES-256-GCM 加密，不直接包含代理域名；客户端解密并校验后才会更新本地缓存。由于解密密钥随开源客户端分发，这项措施用于避免静态目录直接暴露节点，并不用于抵抗客户端逆向。
 
 更新系统节点时，先准备一个不提交到仓库的明文 URL 数组，再生成发布文件：

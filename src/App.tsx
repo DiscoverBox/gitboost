@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { disable as disableAutostart, enable as enableAutostart, isEnabled as autostartEnabled } from "@tauri-apps/plugin-autostart";
+import packageMetadata from "../package.json";
 import { api, getSnapshot } from "./api";
 import type { AppSnapshot, DiagnosticReport, DownloadTarget, ImportResult, NodeEntry, NodeTestProgress, PageKey, RouteScope, UsageLogSnapshot } from "./types";
 import { currentNode, formatLatency, formatRelativeTime, statusLabel, statusTone, successRate } from "./utils";
@@ -492,7 +494,13 @@ function Settings({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, onIm
   const [minutes, setMinutes] = useState(snapshot.settings.healthCheckMinutes);
   const [logLevel, setLogLevel] = useState(snapshot.settings.logLevel);
   const [launchAtLogin, setLaunchAtLogin] = useState(snapshot.settings.launchAtLogin);
+  const [appVersion, setAppVersion] = useState(packageMetadata.version);
   useEffect(() => { autostartEnabled().then(setLaunchAtLogin).catch(() => undefined); }, []);
+  useEffect(() => {
+    getVersion().then((version) => {
+      if (typeof version === "string") setAppVersion(version);
+    }).catch(() => undefined);
+  }, []);
   const saveNodes = async () => { const path = await save({ defaultPath: "gitboost-nodes.json", filters: [{ name: "JSON", extensions: ["json"] }] }); if (path) await run("export", () => api.exportNodes(path), "自定义节点已导出"); };
   const setAutostart = async (enabled: boolean) => {
     enabled ? await enableAutostart() : await disableAutostart();
@@ -509,7 +517,7 @@ function Settings({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, onIm
       </section>
       <CustomNodeSettings snapshot={snapshot} busy={busy} nodeTestProgress={nodeTestProgress} nodeTestRunning={nodeTestRunning} run={run} onImport={onImport} />
       <section className="section-block maintenance"><div className="section-title"><div><h2>数据与恢复</h2><p>恢复只清空 GitBoost 自己的重写规则，不修改仓库 remote。</p></div></div><div className="maintenance-actions"><Button busy={busy === "export"} onClick={() => saveNodes().catch(() => undefined)}>导出自定义节点</Button><Button busy={busy === "clear-logs"} onClick={() => run("clear-logs", api.clearLogs, "本地日志已清理").catch(() => undefined)}>清理日志</Button><Button tone="danger" busy={busy === "restore"} onClick={() => run("restore", api.restoreGitConfig, "GitBoost 配置已恢复为直连").catch(() => undefined)}>恢复 Git 配置</Button></div></section>
-      <div className="about-line"><span>GitBoost 0.1.0 · macOS / Windows</span><span>本地运行 · 无账号 · 无遥测</span></div>
+      <div className="about-line"><span>GitBoost {appVersion} · macOS / Windows</span><span>本地运行 · 无账号 · 无遥测</span></div>
     </div>
   );
 }

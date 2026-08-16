@@ -1,7 +1,7 @@
 {
   "name": "gitboost",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.1-dev.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,8 @@
     "test:ui": "playwright test",
     "test:integration": "cargo test --manifest-path src-tauri/Cargo.toml -- --ignored --nocapture --test-threads=1",
     "test:all": "npm test && npm run test:scripts && cargo test --manifest-path src-tauri/Cargo.toml && npm run test:ui",
+    "version:set": "node scripts/version.mjs set",
+    "release": "node scripts/release.mjs",
     "build:windows": "tauri build --target x86_64-pc-windows-msvc",
     "tauri": "tauri"
   },

@@ -1,5 +1,8 @@
 import { expect, test } from "@playwright/test";
+import { createRequire } from "node:module";
 import type { AppSnapshot } from "../src/types";
+
+const packageMetadata = createRequire(import.meta.url)("../package.json") as { version: string };
 
 test("core desktop workflow is navigable", async ({ page }) => {
   const errors: string[] = [];
@@ -15,6 +18,7 @@ test("core desktop workflow is navigable", async ({ page }) => {
 
   await expect(page.getByRole("navigation", { name: "主要导航" }).getByText("自定义节点", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "设置", exact: true }).click();
+  await expect(page.getByText(`GitBoost ${packageMetadata.version} · macOS / Windows`, { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "自定义节点", exact: true })).toBeVisible();
   const healthCheck = page.locator(".setting-row").filter({ hasText: "后台健康检查" }).locator("select");
   await expect(healthCheck).toHaveValue("1440");
@@ -71,6 +75,7 @@ test("system node refresh reports whether the catalog changed", async ({ page })
     };
     let refreshCount = 0;
     Object.assign(window, { __TAURI_INTERNALS__: { invoke: async (command: string) => {
+      if (command === "plugin:app|version") return "9.8.7";
       if (command === "refresh_system_nodes") return refreshCount++ === 0;
       return snapshot;
     } } });
@@ -78,6 +83,7 @@ test("system node refresh reports whether the catalog changed", async ({ page })
 
   await page.goto("/");
   await page.getByRole("button", { name: "设置", exact: true }).click();
+  await expect(page.getByText("GitBoost 9.8.7 · macOS / Windows", { exact: true })).toBeVisible();
   const refresh = page.getByRole("button", { name: "刷新系统线路" });
 
   await refresh.click();
