@@ -37,3 +37,4 @@ wait-timeout = "0.2"
 
 [dev-dependencies]
 pretty_assertions = "1"
+tauri = { version = "2.8", features = ["test"] }

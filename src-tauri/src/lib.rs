@@ -305,12 +305,14 @@ fn open_project_link(target: String) -> CommandResult<()> {
     downloads::open_in_browser(project_link(&target)?)
 }
 
-fn reveal_main(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        let _ = window.show();
-        let _ = window.unminimize();
-        let _ = window.set_focus();
-    }
+fn reveal_main<R: Runtime>(app: &tauri::AppHandle<R>) -> bool {
+    let Some(window) = app.get_webview_window("main") else {
+        return false;
+    };
+    let _ = window.show();
+    let _ = window.unminimize();
+    let _ = window.set_focus();
+    true
 }
 
 fn should_reveal_main(button: MouseButton, button_state: MouseButtonState) -> bool {
@@ -351,7 +353,9 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
             }
         })
         .on_menu_event(move |app, event| match event.id.as_ref() {
-            "open" => reveal_main(app),
+            "open" => {
+                reveal_main(app);
+            }
             "quit" => app.exit(0),
             "toggle" => {
                 let core = app.state::<AppCore>();
@@ -477,7 +481,7 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let autostart = autostart.macos_launcher(MacosLauncher::LaunchAgent);
 
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(autostart.build())
         .setup(|app| {
@@ -529,13 +533,25 @@ pub fn run() {
             open_download,
             open_project_link,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running GitBoost");
+        .build(tauri::generate_context!())
+        .expect("error while building GitBoost");
+
+    app.run(|app, event| {
+        #[cfg(target_os = "macos")]
+        if let tauri::RunEvent::Reopen { .. } = event {
+            reveal_main(app);
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        let _ = (app, event);
+    });
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{health_check_due, project_link, run_node_test, should_reveal_main, tray_labels};
+    use super::{
+        health_check_due, project_link, reveal_main, run_node_test, should_reveal_main, tray_labels,
+    };
     use crate::models::{HealthSummary, NodeDefinition, NodeEntry, Settings};
     use std::time::Duration;
     use tauri::tray::{MouseButton, MouseButtonState};
@@ -589,6 +605,17 @@ mod tests {
             MouseButton::Right,
             MouseButtonState::Up
         ));
+    }
+
+    #[test]
+    fn reveal_main_targets_the_main_window() {
+        let app = tauri::test::mock_app();
+        assert!(!reveal_main(app.handle()));
+
+        tauri::WebviewWindowBuilder::new(&app, "main", tauri::WebviewUrl::default())
+            .build()
+            .unwrap();
+        assert!(reveal_main(app.handle()));
     }
 
     #[test]
