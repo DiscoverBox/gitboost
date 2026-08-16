@@ -7,16 +7,32 @@ import {
   setProjectVersion,
 } from "./version.mjs";
 
-function runGit(args, projectRoot, { allowFailure = false } = {}) {
+const gitTimeout = 120_000;
+
+function runGit(args, projectRoot, {
+  allowFailure = false,
+  showOutput = false,
+} = {}) {
   const result = spawnSync("git", args, {
     cwd: projectRoot,
     encoding: "utf8",
-    stdio: ["ignore", "pipe", "pipe"],
+    stdio: [
+      "ignore",
+      showOutput ? "inherit" : "pipe",
+      showOutput ? "inherit" : "pipe",
+    ],
+    timeout: gitTimeout,
   });
-  if (result.status !== 0 && !allowFailure) {
-    throw new Error(result.stderr.trim() || `git ${args.join(" ")} 执行失败。`);
+  if (result.error) {
+    if (result.error.code === "ETIMEDOUT") {
+      throw new Error(`git ${args.join(" ")} 超过 2 分钟未完成，已终止。`);
+    }
+    throw result.error;
   }
-  return { status: result.status, output: result.stdout.trim() };
+  if (result.status !== 0 && !allowFailure) {
+    throw new Error(result.stderr?.trim() || `git ${args.join(" ")} 执行失败。`);
+  }
+  return { status: result.status, output: result.stdout?.trim() ?? "" };
 }
 
 export function latestStableVersion(tags) {
@@ -41,6 +57,7 @@ export async function releaseProject(version, {
   const stableVersion = parseStableVersion(version).value;
   const tag = `v${stableVersion}`;
 
+  log("[1/5] 检查分支和工作区状态...");
   if (runGit(["branch", "--show-current"], projectRoot).output !== "main") {
     throw new Error("只能从 main 分支发布。");
   }
@@ -48,7 +65,10 @@ export async function releaseProject(version, {
     throw new Error("工作区存在未提交修改，请先提交或处理后再发布。");
   }
 
-  runGit(["fetch", "origin", "main", "--tags"], projectRoot);
+  log("[2/5] 同步远程分支和 tags...");
+  runGit(["fetch", "origin", "main", "--tags"], projectRoot, {
+    showOutput: true,
+  });
   const head = runGit(["rev-parse", "HEAD"], projectRoot).output;
   const remoteMain = runGit(["rev-parse", "origin/main"], projectRoot).output;
   if (head !== remoteMain) {
@@ -66,6 +86,7 @@ export async function releaseProject(version, {
     throw new Error(`发布版本 ${stableVersion} 必须高于当前版本 ${latest}。`);
   }
 
+  log(`[3/5] 更新项目版本为 ${stableVersion}...`);
   await setProjectVersion(stableVersion, projectRoot);
   runGit(["add", "package.json", "package-lock.json"], projectRoot);
   const diffResult = runGit(
@@ -77,15 +98,20 @@ export async function releaseProject(version, {
     throw new Error("无法确认版本文件的暂存状态。");
   }
   const hasVersionChanges = diffResult.status === 1;
+  log(`[4/5] ${hasVersionChanges ? "创建发布提交和 tag" : "创建发布 tag"}...`);
   if (hasVersionChanges) {
-    runGit(["commit", "-m", `chore: release ${tag}`], projectRoot);
+    runGit(["commit", "-m", `chore: release ${tag}`], projectRoot, {
+      showOutput: true,
+    });
   }
 
   runGit(["tag", "-a", tag, "-m", `GitBoost ${tag}`], projectRoot);
+  log("[5/5] 推送 main 和 tag...");
   try {
     runGit(
       ["push", "--atomic", "origin", "HEAD:refs/heads/main", `refs/tags/${tag}`],
       projectRoot,
+      { showOutput: true },
     );
   } catch (error) {
     throw new Error(

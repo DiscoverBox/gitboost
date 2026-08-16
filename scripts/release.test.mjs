@@ -63,6 +63,11 @@ test("creates a release commit and pushes its annotated tag", async () => {
       git(remoteRoot, "rev-parse", "refs/heads/main"),
     );
     assert.deepEqual(messages, [
+      "[1/5] 检查分支和工作区状态...",
+      "[2/5] 同步远程分支和 tags...",
+      "[3/5] 更新项目版本为 0.2.0...",
+      "[4/5] 创建发布提交和 tag...",
+      "[5/5] 推送 main 和 tag...",
       "GitBoost v0.2.0 已推送，GitHub Release 工作流已触发。",
     ]);
   } finally {
