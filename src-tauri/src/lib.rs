@@ -15,7 +15,7 @@ use std::{
 };
 use tauri::{
     menu::{Menu, MenuItem, PredefinedMenuItem},
-    tray::TrayIconBuilder,
+    tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     Emitter, Manager, Runtime, State,
 };
 #[cfg(target_os = "macos")]
@@ -313,6 +313,10 @@ fn reveal_main(app: &tauri::AppHandle) {
     }
 }
 
+fn should_reveal_main(button: MouseButton, button_state: MouseButtonState) -> bool {
+    button == MouseButton::Left && button_state == MouseButtonState::Up
+}
+
 fn install_tray(app: &tauri::App) -> tauri::Result<()> {
     let snapshot = app.state::<AppCore>().snapshot().ok();
     let (status_text, toggle_text) = snapshot
@@ -334,6 +338,18 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
     let mut tray = TrayIconBuilder::new()
         .menu(&menu)
         .show_menu_on_left_click(false)
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button,
+                button_state,
+                ..
+            } = event
+            {
+                if should_reveal_main(button, button_state) {
+                    reveal_main(tray.app_handle());
+                }
+            }
+        })
         .on_menu_event(move |app, event| match event.id.as_ref() {
             "open" => reveal_main(app),
             "quit" => app.exit(0),
@@ -519,9 +535,10 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
-    use super::{health_check_due, project_link, run_node_test, tray_labels};
+    use super::{health_check_due, project_link, run_node_test, should_reveal_main, tray_labels};
     use crate::models::{HealthSummary, NodeDefinition, NodeEntry, Settings};
     use std::time::Duration;
+    use tauri::tray::{MouseButton, MouseButtonState};
 
     #[test]
     fn node_tests_run_off_the_calling_thread() {
@@ -559,6 +576,19 @@ mod tests {
             tray_labels(&disabled, &[node]),
             ("当前线路：GitHub 直连".into(), "开启加速")
         );
+    }
+
+    #[test]
+    fn only_released_left_click_reveals_main_window() {
+        assert!(should_reveal_main(MouseButton::Left, MouseButtonState::Up));
+        assert!(!should_reveal_main(
+            MouseButton::Left,
+            MouseButtonState::Down
+        ));
+        assert!(!should_reveal_main(
+            MouseButton::Right,
+            MouseButtonState::Up
+        ));
     }
 
     #[test]
