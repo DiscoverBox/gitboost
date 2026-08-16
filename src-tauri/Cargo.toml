@@ -37,4 +37,6 @@ wait-timeout = "0.2"
 
 [dev-dependencies]
 pretty_assertions = "1"
+
+[target.'cfg(not(target_os = "windows"))'.dev-dependencies]
 tauri = { version = "2.8", features = ["test"] }

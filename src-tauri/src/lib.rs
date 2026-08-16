@@ -607,6 +607,9 @@ mod tests {
         ));
     }
 
+    // Tauri mock apps currently make Windows test harnesses fail before startup:
+    // https://github.com/tauri-apps/tauri/issues/13419
+    #[cfg(not(target_os = "windows"))]
     #[test]
     fn reveal_main_targets_the_main_window() {
         let app = tauri::test::mock_app();
