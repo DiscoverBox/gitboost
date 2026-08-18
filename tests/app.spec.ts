@@ -438,12 +438,18 @@ test("route list shows full addresses and filters existing repositories", async 
 
   const longUrl = "https://github.com/organization-with-a-very-long-name/repository-with-a-very-long-name.git";
   await page.evaluate((repositoryUrl) => {
+    const extraRoutes = Array.from({ length: 10 }, (_, index) => ({
+      id: `extra-${index + 1}`,
+      repositoryUrl: `https://github.com/example/repository-${index + 1}.git`,
+      createdAt: "2026-08-13T00:00:00Z",
+    }));
     const snapshot: AppSnapshot = {
       settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null, consentAcknowledgedAt: null },
       nodes: [],
       routes: [
         { id: "long", repositoryUrl, createdAt: "2026-08-13T00:00:00Z" },
         { id: "codex", repositoryUrl: "https://github.com/openai/codex.git", createdAt: "2026-08-13T00:00:00Z" },
+        ...extraRoutes,
       ],
       environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
     };
@@ -457,12 +463,21 @@ test("route list shows full addresses and filters existing repositories", async 
   await expect(fullAddress).toBeVisible();
   await expect(fullAddress).toHaveCSS("white-space", "normal");
   await expect(fullAddress).not.toHaveCSS("text-overflow", "ellipsis");
+  await expect(page.getByText("加速", { exact: true })).toHaveCount(0);
+
+  const pagination = page.getByRole("navigation", { name: "仓库列表分页" });
+  await expect(pagination).toContainText("第 1 / 2 页");
+  await expect(page.getByText("https://github.com/example/repository-9.git", { exact: true })).toBeHidden();
+  await pagination.getByRole("button", { name: "下一页" }).click();
+  await expect(pagination).toContainText("第 2 / 2 页");
+  await expect(page.getByText("https://github.com/example/repository-9.git", { exact: true })).toBeVisible();
 
   const search = page.getByRole("searchbox", { name: "搜索已添加仓库" });
   await search.fill("OPENAI/CODEX");
   await expect(page.getByText("https://github.com/openai/codex.git", { exact: true })).toBeVisible();
   await expect(fullAddress).toBeHidden();
-  await expect(page.getByText("1 / 2 个", { exact: true })).toBeVisible();
+  await expect(page.getByText("1 / 12 个", { exact: true })).toBeVisible();
+  await expect(pagination).toBeHidden();
 
   await search.fill("does-not-exist");
   await expect(page.getByText("没有匹配的仓库")).toBeVisible();
