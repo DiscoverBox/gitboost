@@ -21,13 +21,55 @@ use tauri::{
 #[cfg(target_os = "macos")]
 use tauri_plugin_autostart::MacosLauncher;
 
-type CommandResult<T> = Result<T, String>;
+#[derive(Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct CommandError {
+    message: String,
+    detail: Option<String>,
+}
+
+impl CommandError {
+    fn detailed(message: impl Into<String>, detail: impl Into<String>) -> Self {
+        Self {
+            message: message.into(),
+            detail: Some(detail.into()),
+        }
+    }
+}
+
+impl From<String> for CommandError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            detail: None,
+        }
+    }
+}
+
+impl From<&str> for CommandError {
+    fn from(message: &str) -> Self {
+        message.to_owned().into()
+    }
+}
+
+impl From<downloads::DownloadOpenError> for CommandError {
+    fn from(error: downloads::DownloadOpenError) -> Self {
+        match error {
+            downloads::DownloadOpenError::Probe { node_name, detail } => {
+                Self::detailed(format!("无法通过 {node_name} 获取此文件"), detail)
+            }
+            downloads::DownloadOpenError::Browser(message) => message.into(),
+        }
+    }
+}
+
+type CommandResult<T> = Result<T, CommandError>;
 
 fn project_link(target: &str) -> CommandResult<&'static str> {
     match target {
         "author" => Ok("https://github.com/DiscoverBox"),
         "repository" => Ok("https://github.com/DiscoverBox/gitboost"),
-        _ => Err("未知的项目链接".into()),
+        _ => Err(CommandError::from("未知的项目链接")),
     }
 }
 
@@ -81,11 +123,12 @@ fn refresh_tray_from_core<R: Runtime>(app: &tauri::AppHandle<R>) {
 async fn run_node_test<T, F>(operation: F) -> CommandResult<T>
 where
     T: Send + 'static,
-    F: FnOnce() -> CommandResult<T> + Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
 {
     tauri::async_runtime::spawn_blocking(operation)
         .await
-        .map_err(|error| format!("节点检测任务异常结束：{error}"))?
+        .map_err(|error| CommandError::detailed("节点检测任务异常结束", error.to_string()))?
+        .map_err(Into::into)
 }
 
 fn emit_node_test_progress(app: &tauri::AppHandle, completed: usize, total: usize) {
@@ -112,22 +155,22 @@ fn emit_node_test_finished(app: &tauri::AppHandle) {
 
 #[tauri::command]
 fn get_snapshot(core: State<'_, AppCore>) -> CommandResult<AppSnapshot> {
-    core.snapshot()
+    core.snapshot().map_err(Into::into)
 }
 
 #[tauri::command]
 fn import_nodes(core: State<'_, AppCore>, text: String) -> CommandResult<ImportResult> {
-    core.import_nodes(&text)
+    core.import_nodes(&text).map_err(Into::into)
 }
 
 #[tauri::command]
 fn import_node_file(core: State<'_, AppCore>, path: String) -> CommandResult<ImportResult> {
-    core.import_node_file(Path::new(&path))
+    core.import_node_file(Path::new(&path)).map_err(Into::into)
 }
 
 #[tauri::command]
 fn export_nodes(core: State<'_, AppCore>, path: String) -> CommandResult<String> {
-    core.export_nodes(Path::new(&path))
+    core.export_nodes(Path::new(&path)).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -201,6 +244,11 @@ fn delete_node(
 }
 
 #[tauri::command]
+fn acknowledge_consent(core: State<'_, AppCore>) -> CommandResult<AppSnapshot> {
+    Ok(core.acknowledge_consent()?)
+}
+
+#[tauri::command]
 fn set_acceleration(
     app: tauri::AppHandle,
     core: State<'_, AppCore>,
@@ -224,12 +272,12 @@ fn set_route_scope(
 
 #[tauri::command]
 fn add_route(core: State<'_, AppCore>, repository_url: String) -> CommandResult<AppSnapshot> {
-    core.add_route(&repository_url)
+    core.add_route(&repository_url).map_err(Into::into)
 }
 
 #[tauri::command]
 fn delete_route(core: State<'_, AppCore>, route_id: String) -> CommandResult<AppSnapshot> {
-    core.delete_route(&route_id)
+    core.delete_route(&route_id).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -238,6 +286,7 @@ fn run_diagnostics(
     repository_path: Option<String>,
 ) -> CommandResult<DiagnosticReport> {
     core.diagnostics(repository_path.as_deref().map(Path::new))
+        .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -247,11 +296,12 @@ fn update_settings(
     log_level: String,
 ) -> CommandResult<AppSnapshot> {
     core.update_settings(health_check_minutes, &log_level)
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 fn update_launch_at_login(core: State<'_, AppCore>, enabled: bool) -> CommandResult<AppSnapshot> {
-    core.update_launch_at_login(enabled)
+    core.update_launch_at_login(enabled).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -266,17 +316,17 @@ fn restore_git_config(
 
 #[tauri::command]
 fn clear_logs(core: State<'_, AppCore>) -> CommandResult<AppSnapshot> {
-    core.clear_logs()
+    core.clear_logs().map_err(Into::into)
 }
 
 #[tauri::command]
 fn get_usage_log(core: State<'_, AppCore>) -> CommandResult<UsageLogSnapshot> {
-    core.usage_log()
+    core.usage_log().map_err(Into::into)
 }
 
 #[tauri::command]
 fn set_usage_logging(core: State<'_, AppCore>, enabled: bool) -> CommandResult<AppSnapshot> {
-    core.set_usage_logging(enabled)
+    core.set_usage_logging(enabled).map_err(Into::into)
 }
 
 #[tauri::command]
@@ -286,6 +336,7 @@ fn prepare_download(
     excluded_node_ids: Vec<String>,
 ) -> CommandResult<DownloadTarget> {
     core.prepare_download_excluding(&original_url, &excluded_node_ids)
+        .map_err(Into::into)
 }
 
 #[tauri::command]
@@ -297,12 +348,13 @@ async fn open_download(
     let target = core.prepare_download_with_node(&original_url, &node_id)?;
     tauri::async_runtime::spawn_blocking(move || downloads::probe_and_open(target))
         .await
-        .map_err(|error| format!("下载探测任务异常结束：{error}"))?
+        .map_err(|error| CommandError::detailed("下载探测任务异常结束", error.to_string()))?
+        .map_err(Into::into)
 }
 
 #[tauri::command]
 fn open_project_link(target: String) -> CommandResult<()> {
-    downloads::open_in_browser(project_link(&target)?)
+    downloads::open_in_browser(project_link(&target)?).map_err(Into::into)
 }
 
 fn reveal_main<R: Runtime>(app: &tauri::AppHandle<R>) -> bool {
@@ -518,6 +570,7 @@ pub fn run() {
             rename_node,
             set_node_enabled,
             delete_node,
+            acknowledge_consent,
             set_acceleration,
             set_route_scope,
             add_route,
@@ -550,11 +603,42 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        health_check_due, project_link, reveal_main, run_node_test, should_reveal_main, tray_labels,
+        health_check_due, project_link, reveal_main, run_node_test, should_reveal_main,
+        tray_labels, CommandError,
     };
     use crate::models::{HealthSummary, NodeDefinition, NodeEntry, Settings};
     use std::time::Duration;
     use tauri::tray::{MouseButton, MouseButtonState};
+
+    #[test]
+    fn command_errors_serialize_with_a_stable_frontend_contract() {
+        assert_eq!(
+            serde_json::to_value(CommandError::detailed("下载失败", "connection refused")).unwrap(),
+            serde_json::json!({ "message": "下载失败", "detail": "connection refused" })
+        );
+        assert_eq!(
+            serde_json::to_value(CommandError::from("地址无效")).unwrap(),
+            serde_json::json!({ "message": "地址无效", "detail": null })
+        );
+        let probe_error: CommandError = crate::downloads::DownloadOpenError::Probe {
+            node_name: "Node One".into(),
+            detail: "connection refused".into(),
+        }
+        .into();
+        assert_eq!(
+            serde_json::to_value(probe_error).unwrap(),
+            serde_json::json!({
+                "message": "无法通过 Node One 获取此文件",
+                "detail": "connection refused"
+            })
+        );
+        let browser_error: CommandError =
+            crate::downloads::DownloadOpenError::Browser("默认浏览器未能打开地址".into()).into();
+        assert_eq!(
+            serde_json::to_value(browser_error).unwrap(),
+            serde_json::json!({ "message": "默认浏览器未能打开地址", "detail": null })
+        );
+    }
 
     #[test]
     fn node_tests_run_off_the_calling_thread() {

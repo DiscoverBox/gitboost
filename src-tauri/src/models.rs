@@ -19,6 +19,9 @@ pub struct Settings {
     #[serde(default = "default_true")]
     pub usage_logging_enabled: bool,
     pub last_applied_at: Option<DateTime<Utc>>,
+    // 用户是否已确认“读取流量经过第三方节点”的隐私提示；与 last_applied_at（配置写入时间）语义独立
+    #[serde(default)]
+    pub consent_acknowledged_at: Option<DateTime<Utc>>,
 }
 
 fn default_true() -> bool {
@@ -37,6 +40,7 @@ impl Default for Settings {
             log_level: "info".into(),
             usage_logging_enabled: true,
             last_applied_at: None,
+            consent_acknowledged_at: None,
         }
     }
 }

@@ -12,6 +12,7 @@ const browserMock: AppSnapshot = {
     logLevel: "info",
     usageLoggingEnabled: true,
     lastAppliedAt: null,
+    consentAcknowledgedAt: null,
   },
   nodes: [
     {
@@ -80,6 +81,7 @@ export const api = {
   renameNode: (nodeId: string, name: string) => call<AppSnapshot>("rename_node", { nodeId, name }),
   setNodeEnabled: (nodeId: string, enabled: boolean) => call<AppSnapshot>("set_node_enabled", { nodeId, enabled }),
   deleteNode: (nodeId: string) => call<AppSnapshot>("delete_node", { nodeId }),
+  acknowledgeConsent: () => call<AppSnapshot>("acknowledge_consent"),
   setAcceleration: (enabled: boolean) => call<AppSnapshot>("set_acceleration", { enabled }),
   setRouteScope: (scope: RouteScope) => call<AppSnapshot>("set_route_scope", { scope }),
   addRoute: (repositoryUrl: string) => call<AppSnapshot>("add_route", { repositoryUrl }),

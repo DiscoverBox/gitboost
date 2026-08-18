@@ -6,7 +6,7 @@ import { disable as disableAutostart, enable as enableAutostart, isEnabled as au
 import packageMetadata from "../package.json";
 import { api, getSnapshot } from "./api";
 import type { AppSnapshot, DiagnosticReport, DownloadTarget, ImportResult, NodeEntry, NodeTestProgress, PageKey, RouteScope, UsageLogSnapshot } from "./types";
-import { currentNode, formatLatency, formatRelativeTime, statusLabel, statusTone, successRate } from "./utils";
+import { currentNode, formatLatency, formatRelativeTime, friendlyError, statusLabel, statusTone, successRate } from "./utils";
 
 const navItems: { key: PageKey; label: string }[] = [
   { key: "overview", label: "总览" },
@@ -52,10 +52,6 @@ function ProjectAuthor({ onOpen }: { onOpen: () => void }) {
       </button>
     </section>
   );
-}
-
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function Button({ children, tone = "secondary", busy, busyLabel = "处理中…", ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { tone?: "primary" | "secondary" | "danger" | "quiet"; busy?: boolean; busyLabel?: React.ReactNode }) {
@@ -134,26 +130,26 @@ export default function App() {
   const [page, setPage] = useState<PageKey>("overview");
   const [busy, setBusy] = useState<string | null>(null);
   const [nodeTestProgress, setNodeTestProgress] = useState<NodeTestProgress | null>(null);
-  const [toast, setToast] = useState<{ kind: "success" | "error"; text: string } | null>(null);
+  const [toast, setToast] = useState<{ kind: "success" | "error"; text: string; detail: string | null } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
   const nodeTestRunning = nodeTestProgress !== null;
 
   const reload = useCallback(async () => setSnapshot(await getSnapshot()), []);
   const openProjectLink = useCallback((target: "author" | "repository") => {
-    api.openProjectLink(target).catch((error) => setToast({ kind: "error", text: errorMessage(error) }));
+    api.openProjectLink(target).catch((error) => setToast({ kind: "error", ...friendlyError(error) }));
   }, []);
-  useEffect(() => { reload().catch((error) => setToast({ kind: "error", text: errorMessage(error) })); }, [reload]);
+  useEffect(() => { reload().catch((error) => setToast({ kind: "error", ...friendlyError(error) })); }, [reload]);
   useEffect(() => {
     if (!("__TAURI_INTERNALS__" in window)) return;
     const snapshotListener = listen<AppSnapshot>("snapshot-updated", (event) => setSnapshot(event.payload));
-    const errorListener = listen<string>("operation-error", (event) => setToast({ kind: "error", text: event.payload }));
+    const errorListener = listen<string>("operation-error", (event) => setToast({ kind: "error", ...friendlyError(event.payload) }));
     const progressListener = listen<NodeTestProgress>("node-test-progress", (event) => {
       setNodeTestProgress(event.payload.finished ? null : event.payload);
     });
     return () => { snapshotListener.then((unlisten) => unlisten()); errorListener.then((unlisten) => unlisten()); progressListener.then((unlisten) => unlisten()); };
   }, []);
   useEffect(() => {
-    if (!toast) return;
+    if (!toast || toast.kind === "error") return;
     const timer = window.setTimeout(() => setToast(null), 4200);
     return () => window.clearTimeout(timer);
   }, [toast]);
@@ -167,10 +163,10 @@ export default function App() {
       }
       else await reload();
       const successMessage = typeof message === "function" ? message(result) : message;
-      if (successMessage) setToast({ kind: "success", text: successMessage });
+      if (successMessage) setToast({ kind: "success", text: successMessage, detail: null });
       return result;
     } catch (error) {
-      setToast({ kind: "error", text: errorMessage(error) });
+      setToast({ kind: "error", ...friendlyError(error) });
       throw error;
     } finally {
       setBusy(null);
@@ -206,7 +202,15 @@ export default function App() {
         {page === "diagnostics" && <Diagnostics snapshot={snapshot} busy={busy} />}
         {page === "settings" && <Settings snapshot={snapshot} busy={busy} nodeTestProgress={nodeTestProgress} nodeTestRunning={nodeTestRunning} run={run} onImport={() => setImportOpen(true)} />}
       </main>
-      {toast && <div className={`toast toast--${toast.kind}`}>{toast.text}</div>}
+      {toast && (
+        <div className={`toast toast--${toast.kind}`} role={toast.kind === "error" ? "alert" : "status"}>
+          <div className="toast-body">
+            {toast.text}
+            {toast.detail && <details className="toast-detail"><summary>技术详情</summary><p>{toast.detail}</p></details>}
+          </div>
+          {toast.kind === "error" && <button type="button" className="toast-close" onClick={() => setToast(null)} aria-label="关闭提示">×</button>}
+        </div>
+      )}
       {importOpen && <ImportNodes busy={busy} run={run} onClose={() => setImportOpen(false)} />}
     </div>
   );
@@ -221,7 +225,18 @@ function Overview({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, go }
     { value: "automatic", label: "自动选择" },
     { value: "direct", label: "直连" },
   ] as const;
-  const toggle = () => run("toggle", () => api.setAcceleration(!snapshot.settings.accelerationEnabled), snapshot.settings.accelerationEnabled ? "已恢复 GitHub 直连" : "加速配置已写入并验证").catch(() => undefined);
+  const [consent, setConsent] = useState<(() => void) | null>(null);
+  const apply = (key: string, enabled: boolean, message: string) => run(key, () => api.setAcceleration(enabled), message).catch(() => undefined);
+  // 隐私确认由后端持久化（consentAcknowledgedAt），开启加速的所有入口（含托盘）统一强制；确认一次后保持一键开关
+  const enableWithConsent = (proceed: () => void) => (snapshot.settings.consentAcknowledgedAt ? proceed() : setConsent(() => proceed));
+  const toggle = () => {
+    if (snapshot.settings.accelerationEnabled) apply("toggle", false, "已恢复 GitHub 直连");
+    else enableWithConsent(() => apply("toggle", true, "加速配置已写入并验证"));
+  };
+  const changeMode = (mode: "automatic" | "direct") => {
+    if (mode === "direct") apply("line-mode", false, "已关闭加速，当前使用 GitHub 直连");
+    else enableWithConsent(() => apply("line-mode", true, "已切换为自动选择，加速已开启"));
+  };
   return (
     <div className="page">
       <PageHeader eyebrow="运行状态" title={snapshot.settings.accelerationEnabled ? "读取线路已接入" : "使用 GitHub 原地址，按需加速"} description="GitBoost 只改写公开仓库的读取地址；仓库中保存的 origin 保持不变。" actions={<Button tone={snapshot.settings.accelerationEnabled ? "secondary" : "primary"} busy={busy === "toggle"} disabled={busy === "line-mode"} onClick={toggle}>{snapshot.settings.accelerationEnabled ? "关闭加速" : "开启加速"}</Button>} />
@@ -248,11 +263,20 @@ function Overview({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, go }
         <NodeTestProgressLine progress={nodeTestProgress} />
         <div className="control-row">
           <label>线路模式</label>
-          <Segmented value={snapshot.settings.accelerationEnabled ? "automatic" : "direct"} options={lineOptions} disabled={busy === "line-mode" || busy === "toggle"} onChange={(mode) => run("line-mode", () => api.setAcceleration(mode === "automatic"), mode === "automatic" ? "已切换为自动选择，加速已开启" : "已关闭加速，当前使用 GitHub 直连").catch(() => undefined)} />
+          <Segmented value={snapshot.settings.accelerationEnabled ? "automatic" : "direct"} options={lineOptions} disabled={busy === "line-mode" || busy === "toggle"} onChange={changeMode} />
         </div>
       </section>
 
       <footer className="page-footnote">应用退出后，最后一次成功写入的 Git 配置仍会生效。第三方节点可看到被访问的公开仓库路径和传输内容。</footer>
+      {consent && (
+        <Modal title="首次开启加速" onClose={() => setConsent(null)}>
+          <div className="modal-body">
+            <p className="modal-intro">开启后，{snapshot.settings.routeScope === "allowlist" ? "清单内公开仓库" : "所有 GitHub HTTPS 仓库"}的读取流量将经过第三方加速节点，节点可以看到被访问的仓库路径和传输内容。</p>
+            <p className="modal-intro">仓库中保存的 origin 保持不变，push 仍直连 GitHub。</p>
+          </div>
+          <footer className="modal-footer"><span /><Button onClick={() => setConsent(null)}>取消</Button><Button tone="primary" onClick={() => { const proceed = consent; setConsent(null); if (proceed) run("consent", api.acknowledgeConsent).then(proceed).catch(() => undefined); }}>了解并开启加速</Button></footer>
+        </Modal>
+      )}
     </div>
   );
 }
@@ -421,7 +445,7 @@ function Diagnostics({ snapshot, busy }: { snapshot: AppSnapshot; busy: string |
   const [report, setReport] = useState<DiagnosticReport | null>(null);
   const [diagnosticError, setDiagnosticError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
-  const diagnose = async () => { setRunning(true); setDiagnosticError(null); setReport(null); try { setReport(await api.runDiagnostics(repositoryPath)); } catch (error) { setDiagnosticError(errorMessage(error)); } finally { setRunning(false); } };
+  const diagnose = async () => { setRunning(true); setDiagnosticError(null); setReport(null); try { setReport(await api.runDiagnostics(repositoryPath)); } catch (error) { setDiagnosticError(friendlyError(error).text); } finally { setRunning(false); } };
   const copy = () => report && navigator.clipboard.writeText(report.reportText);
   return (
     <div className="page">

@@ -12,6 +12,7 @@ export interface Settings {
   logLevel: "error" | "info" | "debug";
   usageLoggingEnabled: boolean;
   lastAppliedAt: string | null;
+  consentAcknowledgedAt: string | null;
 }
 
 export interface HealthSummary {

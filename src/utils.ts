@@ -38,3 +38,18 @@ export function statusTone(status: NodeStatus): "neutral" | "success" | "warning
   if (status === "unavailable" || status === "incompatible") return "danger";
   return "neutral";
 }
+
+export function friendlyError(error: unknown): { text: string; detail: string | null } {
+  if (error && typeof error === "object" && !(error instanceof Error)) {
+    const value = error as { message?: unknown; detail?: unknown };
+    if (typeof value.message === "string" && value.message.trim()) {
+      const text = value.message.trim();
+      const detail = typeof value.detail === "string" && value.detail.trim() && value.detail.trim() !== text
+        ? value.detail.trim()
+        : null;
+      return { text, detail };
+    }
+  }
+  const text = (error instanceof Error ? error.message : typeof error === "string" ? error : "").trim();
+  return { text: text || "操作失败，请重试", detail: null };
+}

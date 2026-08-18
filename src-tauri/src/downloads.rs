@@ -34,9 +34,17 @@ pub fn prepare_target(original_url: &str, node: &NodeDefinition) -> Result<Downl
     })
 }
 
-pub fn probe_and_open(target: DownloadTarget) -> Result<DownloadTarget, String> {
-    probe(&target)?;
-    open_in_browser(&target.accelerated_url)?;
+pub enum DownloadOpenError {
+    Probe { node_name: String, detail: String },
+    Browser(String),
+}
+
+pub fn probe_and_open(target: DownloadTarget) -> Result<DownloadTarget, DownloadOpenError> {
+    probe(&target).map_err(|detail| DownloadOpenError::Probe {
+        node_name: target.node_name.clone(),
+        detail,
+    })?;
+    open_in_browser(&target.accelerated_url).map_err(DownloadOpenError::Browser)?;
     Ok(target)
 }
 
@@ -102,7 +110,6 @@ fn probe(target: &DownloadTarget) -> Result<(), String> {
         Duration::from_secs(8),
         PROBE_MAX_BYTES,
     )
-    .map_err(|error| format!("无法通过 {} 获取此文件：{error}", target.node_name))
 }
 
 #[cfg(test)]

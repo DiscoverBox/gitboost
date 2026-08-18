@@ -913,6 +913,9 @@ impl AppCore {
         if enabled && git::git_version().is_none() {
             return Err("未检测到系统 Git".into());
         }
+        if enabled && settings.consent_acknowledged_at.is_none() {
+            return Err("首次开启加速前，请在 GitBoost 窗口中确认隐私提示".into());
+        }
         if enabled && settings.route_scope == RouteScope::Allowlist && self.routes()?.is_empty() {
             return Err("仅加速清单为空，请先加入至少一个公开仓库".into());
         }
@@ -927,6 +930,14 @@ impl AppCore {
             self.select_current(&mut settings, &pairs)?;
         }
         self.write_configuration(&mut settings, &pairs, &self.routes()?)?;
+        self.snapshot()
+    }
+
+    pub fn acknowledge_consent(&self) -> Result<AppSnapshot, String> {
+        let _guard = self.lock.lock();
+        let mut settings = self.settings()?;
+        settings.consent_acknowledged_at = Some(Utc::now());
+        atomic_write_json(&self.paths.settings, &settings)?;
         self.snapshot()
     }
 
@@ -1144,6 +1155,12 @@ impl AppCore {
         let registered = git::include_registered(&self.paths.gitconfig);
         let mut settings = self.settings()?;
         let routes = self.routes()?;
+        let repaired_missing_consent =
+            settings.acceleration_enabled && settings.consent_acknowledged_at.is_none();
+        if repaired_missing_consent {
+            settings.acceleration_enabled = false;
+            settings.current_node_id = None;
+        }
         let repaired_empty_allowlist = settings.acceleration_enabled
             && settings.route_scope == RouteScope::Allowlist
             && routes.is_empty();
@@ -1157,7 +1174,7 @@ impl AppCore {
             settings.current_node_id = None;
         }
         if !registered && !settings.acceleration_enabled {
-            if repaired_empty_allowlist || repaired_disabled_state {
+            if repaired_missing_consent || repaired_empty_allowlist || repaired_disabled_state {
                 atomic_write_json(&self.paths.settings, &settings)?;
             }
             return Ok(());
@@ -1998,6 +2015,7 @@ mod tests {
         let settings = Settings {
             acceleration_enabled: true,
             current_node_id: Some(replacement.id.clone()),
+            consent_acknowledged_at: Some(Utc::now()),
             ..Settings::default()
         };
         atomic_write_json(&core.paths.routes, &vec![route.clone()]).unwrap();
@@ -2093,6 +2111,7 @@ mod tests {
         let settings = Settings {
             acceleration_enabled: true,
             current_node_id: Some(FASTGIT_REWRITE_BASE.into()),
+            consent_acknowledged_at: Some(Utc::now()),
             ..Settings::default()
         };
         atomic_write_json(&core.paths.settings, &settings).unwrap();
@@ -2783,6 +2802,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let core = AppCore::new(directory.path().to_path_buf()).unwrap();
         core.add_route("openai/codex").unwrap();
+        core.acknowledge_consent().unwrap();
 
         assert_eq!(
             core.set_acceleration(true).unwrap_err(),
@@ -2829,6 +2849,38 @@ mod tests {
         let restored_allowlist = core.set_route_scope(RouteScope::Allowlist).unwrap();
         assert!(!restored_allowlist.settings.acceleration_enabled);
         assert!(restored_allowlist.settings.current_node_id.is_none());
+    }
+
+    #[test]
+    fn acceleration_requires_privacy_consent_once() {
+        const MARKER: &str = "GITBOOST_CONSENT_GATE_STATE_CHILD";
+        if rerun_with_isolated_git(
+            "core::tests::acceleration_requires_privacy_consent_once",
+            MARKER,
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        // 常规配置操作（添加路由）不能影响同意状态
+        core.add_route("openai/codex").unwrap();
+        assert!(core.settings().unwrap().consent_acknowledged_at.is_none());
+
+        assert_eq!(
+            core.set_acceleration(true).unwrap_err(),
+            "首次开启加速前，请在 GitBoost 窗口中确认隐私提示"
+        );
+        assert!(!core.settings().unwrap().acceleration_enabled);
+
+        let acknowledged = core.acknowledge_consent().unwrap();
+        assert!(acknowledged.settings.consent_acknowledged_at.is_some());
+        assert!(!acknowledged.settings.acceleration_enabled);
+
+        // 同意后不再要求确认，错误回到线路本身
+        assert_eq!(
+            core.set_acceleration(true).unwrap_err(),
+            "没有通过真实 Git 检测的可用节点"
+        );
     }
 
     #[test]
@@ -3452,6 +3504,16 @@ mod tests {
         );
 
         core.add_route("openai/codex").unwrap();
+        assert_eq!(
+            core.set_acceleration(true).unwrap_err(),
+            "首次开启加速前，请在 GitBoost 窗口中确认隐私提示"
+        );
+        core.acknowledge_consent().unwrap();
+        drop(core);
+
+        // 真实文件持久化和重新加载后，同意状态仍然有效，不依赖进程内 mock 状态。
+        let core = AppCore::new(root.clone()).unwrap();
+        assert!(core.settings().unwrap().consent_acknowledged_at.is_some());
         let enabled = core.set_acceleration(true).unwrap();
         assert!(enabled.settings.acceleration_enabled);
         let node_id = enabled
