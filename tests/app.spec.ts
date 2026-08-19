@@ -244,6 +244,7 @@ test("UI issues commands in workflow order and reflects their results", async ({
           snapshot.settings.consentAcknowledgedAt = "2026-08-14T00:00:00Z";
           return copy();
         }
+        if (command === "get_trace2_target_conflict") return null;
         if (command === "set_acceleration") {
           if (args.enabled && snapshot.routes.length === 0) throw new Error("仅加速清单为空，请先加入至少一个公开仓库");
           snapshot.settings.accelerationEnabled = Boolean(args.enabled);
@@ -301,12 +302,71 @@ test("UI issues commands in workflow order and reflects their results", async ({
   expect(calls.filter(({ command }) => command === "get_snapshot").length).toBeGreaterThan(0);
   expect(calls.filter(({ command }) => ["acknowledge_consent", "set_acceleration", "add_route", "restore_git_config"].includes(command))).toEqual([
     { command: "acknowledge_consent", args: {} },
-    { command: "set_acceleration", args: { enabled: true } },
+    { command: "set_acceleration", args: { enabled: true, replaceTrace2Target: false } },
     { command: "add_route", args: { repositoryUrl: "openai/codex" } },
-    { command: "set_acceleration", args: { enabled: true } },
-    { command: "set_acceleration", args: { enabled: false } },
-    { command: "set_acceleration", args: { enabled: true } },
+    { command: "set_acceleration", args: { enabled: true, replaceTrace2Target: false } },
+    { command: "set_acceleration", args: { enabled: false, replaceTrace2Target: false } },
+    { command: "set_acceleration", args: { enabled: true, replaceTrace2Target: false } },
     { command: "restore_git_config", args: {} },
+  ]);
+});
+
+test("Trace2 conflict asks the user to keep the existing target or switch to GitBoost", async ({ page }) => {
+  await page.addInitScript(() => {
+    const snapshot: AppSnapshot = {
+      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null, consentAcknowledgedAt: "2026-08-14T00:00:00Z" },
+      nodes: [{ id: "verified-node", name: "Verified Node", rewriteBase: "https://proxy.integration.test/https://github.com/", enabled: true, builtIn: false, health: { status: "available", inAutoPool: true, successCount: 2, attemptCount: 2, medianLatencyMs: 25, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } }],
+      routes: [{ id: "route-1", repositoryUrl: "https://github.com/openai/codex.git", createdAt: "2026-08-14T00:00:00Z" }],
+      environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: true, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
+    };
+    const calls: { command: string; args: Record<string, unknown> }[] = [];
+    const copy = () => structuredClone(snapshot);
+    Object.assign(window, {
+      __trace2ChoiceCalls: calls,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, unknown> = {}) => {
+        if (command.startsWith("plugin:event|")) return undefined;
+        calls.push({ command, args });
+        if (command === "get_snapshot") return copy();
+        if (command === "get_trace2_target_conflict") return "af_unix:stream:/Users/example/.git-ai/trace2.sock";
+        if (command === "restore_git_config") {
+          snapshot.settings.accelerationEnabled = false;
+          snapshot.settings.currentNodeId = null;
+          snapshot.environment.includeRegistered = false;
+          snapshot.environment.trace2TargetOverridden = false;
+          return copy();
+        }
+        if (command === "set_acceleration") {
+          snapshot.settings.accelerationEnabled = Boolean(args.enabled);
+          snapshot.settings.currentNodeId = args.enabled ? "verified-node" : null;
+          snapshot.environment.includeRegistered = Boolean(args.enabled);
+          snapshot.environment.trace2TargetOverridden = Boolean(args.enabled && args.replaceTrace2Target);
+          return copy();
+        }
+        return copy();
+      } },
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "开启加速" }).click();
+  const conflict = page.getByRole("dialog", { name: "Git Trace2 已被其他工具使用" });
+  await expect(conflict).toBeVisible();
+  await expect(conflict).toContainText(".git-ai/trace2.sock");
+  await conflict.getByRole("button", { name: "保留现有 Trace2" }).click();
+  await expect(page.locator(".toast")).toHaveText("已保留现有 Trace2 配置");
+  await expect(page.getByText("当前为直连", { exact: true })).toBeVisible();
+
+  await page.getByRole("button", { name: "开启加速" }).click();
+  await page.getByRole("dialog", { name: "Git Trace2 已被其他工具使用" }).getByRole("button", { name: "切换到 GitBoost" }).click();
+  await expect(page.getByText("加速已开启", { exact: true })).toBeVisible();
+  await expect(page.getByText("GitBoost 的 Trace2 接入已失效", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "恢复现有 Trace2" }).click();
+  await expect(page.getByText("当前为直连", { exact: true })).toBeVisible();
+
+  const calls = await page.evaluate(() => (window as typeof window & { __trace2ChoiceCalls: { command: string; args: Record<string, unknown> }[] }).__trace2ChoiceCalls);
+  expect(calls.filter(({ command }) => command === "set_acceleration")).toEqual([
+    { command: "set_acceleration", args: { enabled: true, replaceTrace2Target: true } },
+    { command: "set_acceleration", args: { enabled: false, replaceTrace2Target: false } },
   ]);
 });
 

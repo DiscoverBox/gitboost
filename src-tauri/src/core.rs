@@ -358,10 +358,12 @@ impl AppCore {
                 Ok(conflicts) => (conflicts.len(), None),
                 Err(error) => (0, Some(error)),
             };
+        let expected_trace2_target =
+            format!("af_unix:stream:{}", self.paths.trace_socket.display());
+        let trace2_target_overridden = settings.acceleration_enabled
+            && git::effective_trace2_target().ok().flatten().as_deref()
+                != Some(expected_trace2_target.as_str());
         Ok(AppSnapshot {
-            settings,
-            nodes,
-            routes,
             environment: EnvironmentSummary {
                 git_available: git::git_version().is_some(),
                 git_path: git::git_path(),
@@ -370,7 +372,11 @@ impl AppCore {
                 config_path: self.paths.gitconfig.display().to_string(),
                 conflicts,
                 conflict_scan_error,
+                trace2_target_overridden,
             },
+            settings,
+            nodes,
+            routes,
         })
     }
 
@@ -907,7 +913,15 @@ impl AppCore {
         self.snapshot()
     }
 
-    pub fn set_acceleration(&self, enabled: bool) -> Result<AppSnapshot, String> {
+    pub fn trace2_target_conflict(&self) -> Result<Option<String>, String> {
+        git::external_trace2_target(&self.paths.gitconfig)
+    }
+
+    pub fn set_acceleration(
+        &self,
+        enabled: bool,
+        replace_trace2_target: bool,
+    ) -> Result<AppSnapshot, String> {
         let _guard = self.lock.lock();
         let mut settings = self.settings()?;
         if enabled && git::git_version().is_none() {
@@ -918,6 +932,12 @@ impl AppCore {
         }
         if enabled && settings.route_scope == RouteScope::Allowlist && self.routes()?.is_empty() {
             return Err("仅加速清单为空，请先加入至少一个公开仓库".into());
+        }
+        if enabled
+            && !replace_trace2_target
+            && git::external_trace2_target(&self.paths.gitconfig)?.is_some()
+        {
+            return Err("检测到其他工具正在使用 Git Trace2，请在 GitBoost 窗口中选择保留现有配置或切换到 GitBoost".into());
         }
         if enabled {
             settings.acceleration_enabled = true;
@@ -1040,6 +1060,8 @@ impl AppCore {
             git::build_config(settings, selected, routes, Some(&self.paths.trace_socket))?;
         let previous = fs::read(&self.paths.gitconfig).ok();
         let registered_before = git::include_registered(&self.paths.gitconfig);
+        let preserve_external_trace = !settings.acceleration_enabled
+            && git::external_trace2_target(&self.paths.gitconfig)?.is_some();
         if settings.acceleration_enabled {
             let mut candidate = NamedTempFile::new_in(&self.paths.root)
                 .map_err(|error| format!("无法创建配置候选文件：{error}"))?;
@@ -1063,7 +1085,17 @@ impl AppCore {
             "gitboost.gitconfig",
         );
         atomic_write(&self.paths.gitconfig, content.as_bytes())?;
-        if settings.acceleration_enabled || registered_before {
+        if preserve_external_trace {
+            if let Err(error) = git::unregister_include(&self.paths.gitconfig) {
+                self.restore_git_state(previous.as_deref(), registered_before);
+                return Err(error);
+            }
+        } else if settings.acceleration_enabled {
+            if let Err(error) = git::register_include_last(&self.paths.gitconfig) {
+                self.restore_git_state(previous.as_deref(), registered_before);
+                return Err(error);
+            }
+        } else if registered_before {
             if let Err(error) = git::register_include(&self.paths.gitconfig) {
                 self.restore_git_state(previous.as_deref(), registered_before);
                 return Err(error);
@@ -2805,7 +2837,7 @@ mod tests {
         core.acknowledge_consent().unwrap();
 
         assert_eq!(
-            core.set_acceleration(true).unwrap_err(),
+            core.set_acceleration(true, false).unwrap_err(),
             "没有通过真实 Git 检测的可用节点"
         );
         let unchanged = core.settings().unwrap();
@@ -2827,28 +2859,140 @@ mod tests {
         )
         .unwrap();
 
-        let automatic = core.set_acceleration(true).unwrap();
+        let automatic = core.set_acceleration(true, false).unwrap();
         assert!(automatic.settings.acceleration_enabled);
         assert_eq!(
             automatic.settings.current_node_id.as_deref(),
             Some(FASTGIT_REWRITE_BASE)
         );
 
-        let direct = core.set_acceleration(false).unwrap();
+        let direct = core.set_acceleration(false, false).unwrap();
         assert!(!direct.settings.acceleration_enabled);
         assert!(direct.settings.current_node_id.is_none());
 
-        core.set_acceleration(true).unwrap();
+        core.set_acceleration(true, false).unwrap();
         let route_id = core.routes().unwrap()[0].id.clone();
         let empty_allowlist = core.delete_route(&route_id).unwrap();
         assert!(!empty_allowlist.settings.acceleration_enabled);
         assert!(empty_allowlist.settings.current_node_id.is_none());
 
         core.set_route_scope(RouteScope::Global).unwrap();
-        core.set_acceleration(true).unwrap();
+        core.set_acceleration(true, false).unwrap();
         let restored_allowlist = core.set_route_scope(RouteScope::Allowlist).unwrap();
         assert!(!restored_allowlist.settings.acceleration_enabled);
         assert!(restored_allowlist.settings.current_node_id.is_none());
+    }
+
+    #[test]
+    fn trace2_conflict_requires_a_choice_and_restores_the_external_target() {
+        const MARKER: &str = "GITBOOST_TRACE2_CONFLICT_CHOICE_CHILD";
+        if rerun_with_isolated_git(
+            "core::tests::trace2_conflict_requires_a_choice_and_restores_the_external_target",
+            MARKER,
+        ) {
+            return;
+        }
+        let external_target = "af_unix:stream:/tmp/external-trace2.sock";
+        let configured = std::process::Command::new("git")
+            .args(["config", "--global", "trace2.eventTarget", external_target])
+            .status()
+            .unwrap();
+        assert!(configured.success());
+
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        core.add_route("openai/codex").unwrap();
+        core.acknowledge_consent().unwrap();
+        atomic_write_json(
+            &core.paths.health,
+            &HashMap::from([(
+                FASTGIT_REWRITE_BASE.to_string(),
+                HealthSummary {
+                    status: NodeStatus::Available,
+                    in_auto_pool: true,
+                    success_count: 1,
+                    attempt_count: 1,
+                    ..HealthSummary::default()
+                },
+            )]),
+        )
+        .unwrap();
+
+        assert_eq!(
+            core.trace2_target_conflict().unwrap().as_deref(),
+            Some(external_target)
+        );
+        assert!(core
+            .set_acceleration(true, false)
+            .unwrap_err()
+            .contains("Trace2"));
+        assert!(!core.settings().unwrap().acceleration_enabled);
+
+        let enabled = core.set_acceleration(true, true).unwrap();
+        assert!(enabled.settings.acceleration_enabled);
+        assert!(enabled.environment.include_registered);
+        assert!(!enabled.environment.trace2_target_overridden);
+        let effective = std::process::Command::new("git")
+            .args([
+                "config",
+                "--global",
+                "--includes",
+                "--get",
+                "trace2.eventTarget",
+            ])
+            .output()
+            .unwrap();
+        assert!(effective.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&effective.stdout).trim(),
+            format!("af_unix:stream:{}", core.paths.trace_socket.display())
+        );
+
+        let external_config = directory.path().join("external.gitconfig");
+        fs::write(
+            &external_config,
+            format!("[trace2]\n\teventTarget = {external_target}\n"),
+        )
+        .unwrap();
+        let overridden = std::process::Command::new("git")
+            .args([
+                "config",
+                "--global",
+                "--add",
+                "include.path",
+                external_config.to_string_lossy().as_ref(),
+            ])
+            .status()
+            .unwrap();
+        assert!(overridden.success());
+        assert!(
+            core.snapshot()
+                .unwrap()
+                .environment
+                .trace2_target_overridden
+        );
+
+        let reclaimed = core.set_acceleration(true, true).unwrap();
+        assert!(!reclaimed.environment.trace2_target_overridden);
+
+        let disabled = core.set_acceleration(false, false).unwrap();
+        assert!(!disabled.settings.acceleration_enabled);
+        assert!(!disabled.environment.include_registered);
+        let restored = std::process::Command::new("git")
+            .args([
+                "config",
+                "--global",
+                "--includes",
+                "--get",
+                "trace2.eventTarget",
+            ])
+            .output()
+            .unwrap();
+        assert!(restored.status.success());
+        assert_eq!(
+            String::from_utf8_lossy(&restored.stdout).trim(),
+            external_target
+        );
     }
 
     #[test]
@@ -2867,7 +3011,7 @@ mod tests {
         assert!(core.settings().unwrap().consent_acknowledged_at.is_none());
 
         assert_eq!(
-            core.set_acceleration(true).unwrap_err(),
+            core.set_acceleration(true, false).unwrap_err(),
             "首次开启加速前，请在 GitBoost 窗口中确认隐私提示"
         );
         assert!(!core.settings().unwrap().acceleration_enabled);
@@ -2878,7 +3022,7 @@ mod tests {
 
         // 同意后不再要求确认，错误回到线路本身
         assert_eq!(
-            core.set_acceleration(true).unwrap_err(),
+            core.set_acceleration(true, false).unwrap_err(),
             "没有通过真实 Git 检测的可用节点"
         );
     }
@@ -3505,7 +3649,7 @@ mod tests {
 
         core.add_route("openai/codex").unwrap();
         assert_eq!(
-            core.set_acceleration(true).unwrap_err(),
+            core.set_acceleration(true, false).unwrap_err(),
             "首次开启加速前，请在 GitBoost 窗口中确认隐私提示"
         );
         core.acknowledge_consent().unwrap();
@@ -3514,7 +3658,7 @@ mod tests {
         // 真实文件持久化和重新加载后，同意状态仍然有效，不依赖进程内 mock 状态。
         let core = AppCore::new(root.clone()).unwrap();
         assert!(core.settings().unwrap().consent_acknowledged_at.is_some());
-        let enabled = core.set_acceleration(true).unwrap();
+        let enabled = core.set_acceleration(true, false).unwrap();
         assert!(enabled.settings.acceleration_enabled);
         let node_id = enabled
             .settings

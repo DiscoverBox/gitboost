@@ -1,5 +1,6 @@
 use crate::core::{AppCore, FailoverOutcome};
 use chrono::{DateTime, Utc};
+use parking_lot::Mutex;
 use serde::Deserialize;
 use socket2::{Domain, SockAddr, Socket, Type};
 use std::{
@@ -7,8 +8,9 @@ use std::{
     fs,
     io::{BufRead, BufReader},
     path::Path,
+    sync::Arc,
 };
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter, Manager, Runtime};
 
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
@@ -115,7 +117,7 @@ fn bind_listener(path: &Path) -> std::io::Result<Socket> {
     Ok(listener)
 }
 
-pub fn start_listener(app: AppHandle) {
+pub fn start_listener<R: Runtime>(app: AppHandle<R>) {
     std::thread::spawn(move || {
         let socket_path = app.state::<AppCore>().trace_socket_path();
         if socket_path.exists() {
@@ -132,7 +134,7 @@ pub fn start_listener(app: AppHandle) {
         #[cfg(unix)]
         let _ = fs::set_permissions(&socket_path, fs::Permissions::from_mode(0o600));
         app.state::<AppCore>().set_usage_listening(true);
-        let mut assembler = TraceAssembler::default();
+        let assembler = Arc::new(Mutex::new(TraceAssembler::default()));
         loop {
             let (stream, _) = match listener.accept() {
                 Ok(connection) => connection,
@@ -142,36 +144,46 @@ pub fn start_listener(app: AppHandle) {
                     break;
                 }
             };
-            for line in BufReader::new(stream).split(b'\n') {
-                match line {
-                    Ok(line) if !line.is_empty() => {
-                        if let Some(completed) = assembler.ingest(&line) {
-                            match app.state::<AppCore>().observe_git_operation(completed) {
-                                Ok(Some(node_id)) => {
-                                    start_failed_node_recheck(app.clone(), node_id)
+            let connection_app = app.clone();
+            let connection_assembler = Arc::clone(&assembler);
+            std::thread::spawn(move || {
+                for line in BufReader::new(stream).split(b'\n') {
+                    match line {
+                        Ok(line) if !line.is_empty() => {
+                            let completed = connection_assembler.lock().ingest(&line);
+                            if let Some(completed) = completed {
+                                match connection_app
+                                    .state::<AppCore>()
+                                    .observe_git_operation(completed)
+                                {
+                                    Ok(Some(node_id)) => {
+                                        start_failed_node_recheck(connection_app.clone(), node_id)
+                                    }
+                                    Ok(None) => {}
+                                    Err(error) => {
+                                        connection_app.state::<AppCore>().usage_connection_failed(
+                                            &format!("Git operation observation failed: {error}"),
+                                        )
+                                    }
                                 }
-                                Ok(None) => {}
-                                Err(error) => app.state::<AppCore>().usage_connection_failed(
-                                    &format!("Git operation observation failed: {error}"),
-                                ),
                             }
                         }
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        let _ = app.state::<AppCore>().usage_connection_failed(&format!(
-                            "Trace2 socket read failed: {error}"
-                        ));
+                        Ok(_) => {}
+                        Err(error) => {
+                            let _ = connection_app.state::<AppCore>().usage_connection_failed(
+                                &format!("Trace2 socket read failed: {error}"),
+                            );
+                        }
                     }
                 }
-            }
+            });
         }
         app.state::<AppCore>().set_usage_listening(false);
         let _ = fs::remove_file(&socket_path);
     });
 }
 
-fn start_failed_node_recheck(app: AppHandle, node_id: String) {
+fn start_failed_node_recheck<R: Runtime>(app: AppHandle<R>, node_id: String) {
     tauri::async_runtime::spawn_blocking(move || {
         let result = app.state::<AppCore>().recheck_failed_node(&node_id);
         match result {
@@ -253,5 +265,64 @@ mod tests {
         assert_eq!(completed.command, "ls-remote");
         assert!(completed.effective_url.starts_with(rewrite_base));
         assert_ne!(completed.exit_code, 0);
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    #[test]
+    fn real_git_trace_is_read_while_another_connection_remains_open() {
+        use std::{process::Stdio, time::Duration};
+        use wait_timeout::ChildExt;
+
+        let directory = tempfile::tempdir().unwrap();
+        let app = tauri::test::mock_app();
+        app.manage(AppCore::new(directory.path().join("app-data")).unwrap());
+        start_listener(app.handle().clone());
+
+        let socket_path = directory.path().join("app-data/trace2.sock");
+        for _ in 0..100 {
+            if socket_path.exists() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(socket_path.exists(), "Trace2 listener did not start");
+
+        let blocker = Socket::new(Domain::UNIX, Type::STREAM, None).unwrap();
+        blocker
+            .connect(&SockAddr::unix(&socket_path).unwrap())
+            .unwrap();
+
+        let global_config = directory.path().join("global.gitconfig");
+        let mut config = String::new();
+        for index in 0..4_000 {
+            config.push_str(&format!(
+                "[test \"entry-{index}\"]\n\tvalue = trace-payload-{index}\n"
+            ));
+        }
+        fs::write(&global_config, config).unwrap();
+
+        let trace_target = format!("af_unix:stream:{}", socket_path.display());
+        let mut git = std::process::Command::new("git")
+            .arg("version")
+            .current_dir(directory.path())
+            .env("GIT_CONFIG_GLOBAL", &global_config)
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_TRACE2_EVENT", trace_target)
+            .env("GIT_TRACE2_CONFIG_PARAMS", "*")
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let status = match git.wait_timeout(Duration::from_secs(5)).unwrap() {
+            Some(status) => status,
+            None => {
+                let _ = git.kill();
+                let _ = git.wait();
+                panic!("real Git blocked while another Trace2 connection remained open");
+            }
+        };
+        assert!(status.success());
+        drop(blocker);
     }
 }

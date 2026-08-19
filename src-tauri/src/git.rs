@@ -311,6 +311,11 @@ pub fn register_include(config_path: &Path) -> Result<(), String> {
     }
 }
 
+pub fn register_include_last(config_path: &Path) -> Result<(), String> {
+    unregister_include(config_path)?;
+    register_include(config_path)
+}
+
 pub fn unregister_include(config_path: &Path) -> Result<(), String> {
     let mut values = matching_include_values(config_path)?;
     values.sort();
@@ -337,6 +342,79 @@ pub fn unregister_include(config_path: &Path) -> Result<(), String> {
     } else {
         Err("无法精确移除 GitBoost 的 include.path".into())
     }
+}
+
+pub fn external_trace2_target(config_path: &Path) -> Result<Option<String>, String> {
+    let targets = configured_trace2_targets()?;
+    let mut external = None;
+    for (origin, target) in targets {
+        let managed = origin
+            .strip_prefix("file:")
+            .map(Path::new)
+            .filter(|path| path.is_absolute())
+            .is_some_and(|path| same_config_file(path, config_path).unwrap_or(false));
+        if !managed {
+            external = Some(target);
+        }
+    }
+    Ok(external.filter(|target| trace2_target_enabled(target)))
+}
+
+pub fn effective_trace2_target() -> Result<Option<String>, String> {
+    Ok(configured_trace2_targets()?
+        .pop()
+        .map(|(_, target)| target)
+        .filter(|target| trace2_target_enabled(target)))
+}
+
+fn configured_trace2_targets() -> Result<Vec<(String, String)>, String> {
+    let mut targets = trace2_targets("--system")?;
+    targets.extend(trace2_targets("--global")?);
+    Ok(targets)
+}
+
+fn trace2_target_enabled(target: &str) -> bool {
+    let target = target.trim();
+    !target.is_empty() && target != "0" && !target.eq_ignore_ascii_case("false")
+}
+
+fn trace2_targets(scope: &str) -> Result<Vec<(String, String)>, String> {
+    let output = run_git(
+        [
+            "config",
+            scope,
+            "--includes",
+            "--show-origin",
+            "--null",
+            "--get-all",
+            "trace2.eventTarget",
+        ],
+        None,
+        Duration::from_secs(5),
+    )?;
+    if output.status.code() == Some(1) {
+        return Ok(vec![]);
+    }
+    if !output.status.success() {
+        return Err(command_error(&output));
+    }
+    let fields: Vec<_> = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty())
+        .collect();
+    if !fields.len().is_multiple_of(2) {
+        return Err("无法解析 Git Trace2 配置来源".into());
+    }
+    Ok(fields
+        .chunks_exact(2)
+        .map(|pair| {
+            (
+                String::from_utf8_lossy(pair[0]).into_owned(),
+                String::from_utf8_lossy(pair[1]).into_owned(),
+            )
+        })
+        .collect())
 }
 
 pub fn find_conflicts(

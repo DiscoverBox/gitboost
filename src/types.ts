@@ -55,6 +55,7 @@ export interface EnvironmentSummary {
   configPath: string;
   conflicts: number;
   conflictScanError: string | null;
+  trace2TargetOverridden?: boolean;
 }
 
 export interface AppSnapshot {

@@ -150,6 +150,7 @@ pub struct EnvironmentSummary {
     pub config_path: String,
     pub conflicts: usize,
     pub conflict_scan_error: Option<String>,
+    pub trace2_target_overridden: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]

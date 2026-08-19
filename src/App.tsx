@@ -227,16 +227,21 @@ function Overview({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, go }
     { value: "direct", label: "直连" },
   ] as const;
   const [consent, setConsent] = useState<(() => void) | null>(null);
-  const apply = (key: string, enabled: boolean, message: string) => run(key, () => api.setAcceleration(enabled), message).catch(() => undefined);
+  const [trace2Choice, setTrace2Choice] = useState<{ target: string; key: string; message: string } | null>(null);
+  const apply = (key: string, enabled: boolean, message: string, replaceTrace2Target = false) => run(key, () => api.setAcceleration(enabled, replaceTrace2Target), message).catch(() => undefined);
+  const requestEnable = (key: string, message: string) => run(key, api.getTrace2TargetConflict).then((target) => {
+    if (target) setTrace2Choice({ target, key, message });
+    else apply(key, true, message);
+  }).catch(() => undefined);
   // 隐私确认由后端持久化（consentAcknowledgedAt），开启加速的所有入口（含托盘）统一强制；确认一次后保持一键开关
   const enableWithConsent = (proceed: () => void) => (snapshot.settings.consentAcknowledgedAt ? proceed() : setConsent(() => proceed));
   const toggle = () => {
     if (snapshot.settings.accelerationEnabled) apply("toggle", false, "已恢复 GitHub 直连");
-    else enableWithConsent(() => apply("toggle", true, "加速配置已写入并验证"));
+    else enableWithConsent(() => requestEnable("toggle", "加速配置已写入并验证"));
   };
   const changeMode = (mode: "automatic" | "direct") => {
     if (mode === "direct") apply("line-mode", false, "已关闭加速，当前使用 GitHub 直连");
-    else enableWithConsent(() => apply("line-mode", true, "已切换为自动选择，加速已开启"));
+    else enableWithConsent(() => requestEnable("line-mode", "已切换为自动选择，加速已开启"));
   };
   return (
     <div className="page">
@@ -256,6 +261,7 @@ function Overview({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, go }
       </section>
 
       {!snapshot.environment.gitAvailable && <div className="notice notice--danger"><strong>未检测到系统 Git</strong><p>请先安装 Git（Windows 推荐 Git for Windows），然后再开启加速。</p></div>}
+      {snapshot.environment.trace2TargetOverridden && <div className="notice notice--danger"><strong>GitBoost 的 Trace2 接入已失效</strong><p>其他工具覆盖了当前 target，自动故障切换和使用日志无法工作。</p><Button tone="quiet" busy={busy === "trace2-restore"} onClick={() => apply("trace2-restore", false, "已关闭加速并恢复现有 Trace2")}>恢复现有 Trace2</Button></div>}
       {snapshot.environment.conflictScanError ? <div className="notice notice--danger"><strong>URL 重写冲突检查失败</strong><p>{snapshot.environment.conflictScanError}</p><Button tone="quiet" onClick={() => go("diagnostics")}>查看诊断</Button></div> : snapshot.environment.conflicts > 0 && <div className="notice notice--warning"><strong>发现 {snapshot.environment.conflicts} 条 URL 重写冲突</strong><p>GitBoost 不会覆盖它们。请先到环境诊断查看来源。</p><Button tone="quiet" onClick={() => go("diagnostics")}>查看诊断</Button></div>}
       {!usable.length && <div className="notice"><strong>自动线路池中还没有可用线路</strong><p>系统线路和自定义节点都必须先通过真实 Git 检测。</p><Button tone="quiet" busy={busy === "test-all" || nodeTestRunning} busyLabel={nodeTestProgress ? `可用 ${nodeTestProgress.completed}/${nodeTestProgress.total}` : undefined} onClick={() => run("test-all", api.testAllNodes, "线路检测完成").catch(() => undefined)}>立即检测</Button></div>}
 
@@ -276,6 +282,19 @@ function Overview({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, go }
             <p className="modal-intro">仓库中保存的 origin 保持不变，push 仍直连 GitHub。</p>
           </div>
           <footer className="modal-footer"><span /><Button onClick={() => setConsent(null)}>取消</Button><Button tone="primary" onClick={() => { const proceed = consent; setConsent(null); if (proceed) run("consent", api.acknowledgeConsent).then(proceed).catch(() => undefined); }}>了解并开启加速</Button></footer>
+        </Modal>
+      )}
+      {trace2Choice && (
+        <Modal title="Git Trace2 已被其他工具使用" onClose={() => setTrace2Choice(null)}>
+          <div className="modal-body">
+            <p className="modal-intro">Git 同一时间只能向一个 Trace2 target 写入事件。请选择由 GitBoost 接管，或保留当前工具并继续使用 GitHub 直连。</p>
+            <p className="modal-intro"><code>{trace2Choice.target}</code></p>
+          </div>
+          <footer className="modal-footer">
+            <span />
+            <Button onClick={() => { setTrace2Choice(null); run("trace2-choice", api.restoreGitConfig, "已保留现有 Trace2 配置").catch(() => undefined); }}>保留现有 Trace2</Button>
+            <Button tone="primary" onClick={() => { const choice = trace2Choice; setTrace2Choice(null); apply(choice.key, true, choice.message, true); }}>切换到 GitBoost</Button>
+          </footer>
         </Modal>
       )}
     </div>

@@ -253,10 +253,16 @@ fn set_acceleration(
     app: tauri::AppHandle,
     core: State<'_, AppCore>,
     enabled: bool,
+    replace_trace2_target: bool,
 ) -> CommandResult<AppSnapshot> {
-    let snapshot = core.set_acceleration(enabled)?;
+    let snapshot = core.set_acceleration(enabled, replace_trace2_target)?;
     refresh_tray(&app, &snapshot);
     Ok(snapshot)
+}
+
+#[tauri::command]
+fn get_trace2_target_conflict(core: State<'_, AppCore>) -> CommandResult<Option<String>> {
+    Ok(core.trace2_target_conflict()?)
 }
 
 #[tauri::command]
@@ -415,7 +421,7 @@ fn install_tray(app: &tauri::App) -> tauri::Result<()> {
                     .snapshot()
                     .map(|state| state.settings.acceleration_enabled)
                     .unwrap_or(false);
-                match core.set_acceleration(!current_enabled) {
+                match core.set_acceleration(!current_enabled, false) {
                     Ok(state) => {
                         refresh_tray(app, &state);
                         let _ = app.emit("snapshot-updated", state);
@@ -571,6 +577,7 @@ pub fn run() {
             set_node_enabled,
             delete_node,
             acknowledge_consent,
+            get_trace2_target_conflict,
             set_acceleration,
             set_route_scope,
             add_route,
