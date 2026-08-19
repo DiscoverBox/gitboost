@@ -1,0 +1,21 @@
+package-lock.json
+  s_a950079dc5fad0::t_78fe6dedcfe0b9 3,9
+package.json
+  s_a950079dc5fad0::t_b522a30ba99378 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "44e022759c3e2b4c2fcb307c9bca62ae78bf27c1",
+  "prompts": {},
+  "sessions": {
+    "s_a950079dc5fad0": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019ffe06-08eb-7813-a490-f8c054ac9202",
+        "model": "unknown"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
