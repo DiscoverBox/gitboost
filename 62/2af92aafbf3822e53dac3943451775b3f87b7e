@@ -1,0 +1,64 @@
+src-tauri/src/core.rs
+  s_5a79d94dcd0001::t_eb64be52a172bf 916-924,936-941,1063-1064,1088-1092
+  s_5a79d94dcd0001::t_14c539ddef09f4 2840,2862,2869,2873,2880,3014,3025,3652,3661
+  s_5a79d94dcd0001::t_3ca738841baac5 2951-2956,2962-2963
+  s_5a79d94dcd0001::t_1c757caea708aa 2897,2925-2928,2992-2995
+  s_5a79d94dcd0001::t_99f139123df5df 1093-1098,2974-2976
+  s_5a79d94dcd0001::t_8adc63aa89b92c 2968-2973
+  s_5a79d94dcd0001::t_7c69e1bedcf616 361-365,375
+  s_5a79d94dcd0001::t_f4c443f5d79ee5 377-379
+  s_5a79d94dcd0001::t_b820a664a64e64 2887-2896,2898-2924,2929-2933,2935-2949,2977-2991,2996-2997
+  s_5a79d94dcd0001::t_df9c3cb740bed7 2934,2950,2957-2961,2964-2967
+  s_e1dacbac79ff05::t_6318b365921a32 2886
+src/styles.css
+  s_5a79d94dcd0001::t_ebbead15b7a266 193
+src-tauri/src/usage.rs
+  s_5a79d94dcd0001::t_a941b90caf5552 3,11,13,120,137,147-158,162,171-176,179,186
+  s_5a79d94dcd0001::t_dd95e066411a80 159-161,163-167,291-293
+  s_5a79d94dcd0001::t_a3ae5c7be5f4c9 269-290,294-327
+src/types.ts
+  s_5a79d94dcd0001::t_f4c443f5d79ee5 58
+src/api.ts
+  s_5a79d94dcd0001::t_41311271a65805 85-86
+src-tauri/src/models.rs
+  s_5a79d94dcd0001::t_f4c443f5d79ee5 153
+src-tauri/src/git.rs
+  s_5a79d94dcd0001::t_f4c443f5d79ee5 348,360-378
+  s_5a79d94dcd0001::t_99f139123df5df 314-318
+  s_5a79d94dcd0001::t_0df14c88c0416a 347,349-359,379-419
+src/App.tsx
+  s_5a79d94dcd0001::t_89aa08434ac0db 264
+  s_5a79d94dcd0001::t_41311271a65805 230-235,240,244,287-290,292-297
+  s_5a79d94dcd0001::t_b4a05972df7014 291
+  s_e1dacbac79ff05::t_20172657337662 298-299
+src-tauri/src/lib.rs
+  s_5a79d94dcd0001::t_14c539ddef09f4 256,258,263-267,424,580
+tests/app.spec.ts
+  s_5a79d94dcd0001::t_b4726d12cebd62 247,305,307-309,314-334,336-341,343-361,365-368
+  s_5a79d94dcd0001::t_029e2179331ad7 335,342,362-364,369
+  s_e1dacbac79ff05::t_7bf75bb17478df 370-372
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.6.22",
+  "base_commit_sha": "622af92aafbf3822e53dac3943451775b3f87b7e",
+  "prompts": {},
+  "sessions": {
+    "s_5a79d94dcd0001": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a018f6-2c12-7b83-8e4d-71f991c50ee8",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    },
+    "s_e1dacbac79ff05": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a01913-852f-7cc0-b506-1fdb6bae868c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
