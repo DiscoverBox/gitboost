@@ -1,97 +1,151 @@
 # GitBoost
 
-GitBoost 是一个 macOS / Windows 桌面工具：用户继续使用原始 `https://github.com/...` 地址，应用通过 Git 原生 URL 重写，把公开仓库的读取临时切到本机自动选择的加速线路。push 默认保持 GitHub 直连；显式 `pushurl` 会在诊断中告警。
+GitBoost 为公开 GitHub 仓库选择可用的 HTTPS 加速线路。仓库里的 `origin` 仍然是 `https://github.com/...`，更换线路时不用修改 remote。
 
-第一次使用请参阅 [GitBoost 使用教程](docs/USER_GUIDE.md)。
+> GitBoost 只适合加速公开仓库。第三方镜像能够看到仓库路径和传输内容，请勿用它访问私有仓库或传输敏感信息。
 
-当前交付支持 Apple Silicon（arm64）macOS，以及 64 位 Windows 10/11（x86_64）。macOS 不构建 Intel 或 Universal 版本。
+## 为什么要做 GitBoost
 
-## 当前实现
+### 直接使用镜像会修改 remote
 
-- Tauri 2 + Rust 核心，React + TypeScript 界面。
-- 从官方静态 URL 列表更新系统节点，本地保留 Last Known Good 缓存；远程不可用不影响已有线路。
-- 系统节点与用户自定义节点合并后统一规范化、去重和检测；凭据、查询参数与片段会被拒绝。
-- 隔离的 `git ls-remote` 双次检测、最多 4 路并发、全量任务互斥、失败分类、有限健康历史与自动选路。
-- 全局加速 / 基于 URL 前缀的仅加速清单、公开仓库清单、自动选路与直连模式。
-- GitHub 地址校验、节点小流量探测和浏览器打开。
-- 独立 `gitboost.gitconfig`、候选配置验证、原子替换、精确 include 注册与恢复。
-- Git 冲突、有效 fetch/push 地址、显式 `pushurl` 的脱敏诊断。
-- 基于 Git Trace2 Unix Stream Socket 的实际连接日志，区分加速线路、GitHub 直连和其他重写；不落盘原始参数或凭据。
-- 自动模式下，实际 Git 读取失败会触发当前节点的真实 Git 复检；确认节点异常后为下一次命令切换线路，没有候选节点时恢复 GitHub 直连。
-- macOS / Windows 托盘控制、定时健康检查、登录时启动。
-
-## 路由清单的匹配边界
-
-Git 的 `insteadOf` 按 URL 前缀匹配。为同时支持带或不带 `.git` 的仓库地址，GitBoost 会用去掉 `.git` 的清单地址作为匹配前缀。因此，清单中的 `https://github.com/owner/repo.git` 也会匹配 `https://github.com/owner/repo-private.git` 等以同一地址开头的仓库。
-
-这是当前接受的实现边界。请勿将名称可能与私有仓库形成前缀关系的公开仓库加入清单；存在这种情况时，请使用直连模式，避免私有仓库读取经过外部节点。push 仍默认保持 GitHub 直连，但显式 `pushurl` 不受此保证。
-
-## 开发
+很多镜像要求在 clone 时使用镜像地址：
 
 ```bash
-npm install
-npm test
-npm run test:ui
+git clone https://example-mirror.com/https://github.com/owner/repository.git
+```
+
+Git 会把 clone 时使用的地址保存到 `remote.origin.url`，具体行为见 [Git clone 文档](https://git-scm.com/docs/git-clone#_description)。镜像失效或更换域名后，已有仓库也要逐个修改 remote。
+
+GitBoost 改用 Git 原生的 [`url.<base>.insteadOf`](https://git-scm.com/docs/git-config#Documentation/git-config.txt-urlbaseinsteadOf) 规则。平时仍然使用原始 GitHub 地址：
+
+```bash
+git clone https://github.com/owner/repository.git
+```
+
+线路失效时在 GitBoost 中重新检测或切换节点即可，仓库里的 `origin` 不变。
+
+### Claude Code 的 Plugin 也需要访问 GitHub
+
+[Claude Code Marketplace](https://code.claude.com/docs/en/plugin-marketplaces) 支持用 GitHub 的 `owner/repo` 作为来源。例如 [Superpowers Marketplace](https://github.com/obra/superpowers-marketplace) 的安装命令是：
+
+```text
+/plugin marketplace add obra/superpowers-marketplace
+```
+
+这条命令需要从 GitHub 取得仓库。GitHub 无法稳定访问时，添加 Marketplace、安装 Plugin 和后续更新都可能失败。
+
+开启全局加速，或把对应的公开仓库加入路由清单后，GitBoost 会处理这类 GitHub HTTPS Git 请求。原来的 `owner/repo` 安装方式不用改，其他来源和安装方式见 [Claude Code 官方文档](https://code.claude.com/docs/en/discover-plugins)。
+
+## 系统架构
+
+GitBoost 使用 [Tauri 2](https://v2.tauri.app/) 开发。界面采用 React 19、TypeScript 和 Vite，线路检测、Git 配置和本地数据由 Rust 处理。
+
+```mermaid
+flowchart LR
+    User["用户"] --> UI["React + TypeScript 界面"]
+    UI <-->|"Tauri IPC"| Core["Rust / Tauri 核心"]
+
+    Core --> Route["路由与节点管理"]
+    Route --> Catalog["系统节点目录<br/>用户自定义节点"]
+    Route --> Probe["HTTP 探测<br/>git ls-remote 检测"]
+
+    Core --> Config["独立 gitboost.gitconfig<br/>include.path 注册"]
+    Config --> Git["系统 Git<br/>url.insteadOf 透明重写"]
+    Git --> Direct["GitHub 直连"]
+    Git --> Mirror["第三方加速线路"]
+
+    Git --> Trace["Git Trace2 事件"]
+    Trace --> Core
+    Core --> Store["本地设置、健康状态<br/>脱敏使用日志"]
+```
+
+GitBoost 不提供代理服务。它只检测第三方线路，并通过独立的 `gitboost.gitconfig` 接入系统 Git。设置、节点状态和脱敏后的使用日志都保存在本机。
+
+## 支持的系统
+
+| 系统 | 架构 | 安装包 |
+| --- | --- | --- |
+| macOS 12 或更高版本 | Apple Silicon（arm64） | `.dmg`、`.app` |
+| 64 位 Windows 10/11 | x86_64 | NSIS `.exe`、`.msi` |
+
+当前不提供 Intel Mac、Universal macOS 或 Linux 安装包。Windows 用户需要预先安装 [Git for Windows](https://git-scm.com/download/win)。
+
+> **当前安装包没有正式代码签名。**
+>
+> macOS 包未使用 Apple Developer ID 证书签名，也未经过 Apple 公证。Windows 包未配置发布者代码签名，可能显示“发布者未知”或触发 SmartScreen。请只从本项目的 [GitHub Releases](https://github.com/DiscoverBox/gitboost/releases) 下载。
+
+## 用户手册
+
+安装、首次启用、线路确认、环境诊断和恢复配置见 [GitBoost 用户手册](docs/USER_GUIDE.md)。
+
+## 开发与版本发布
+
+### 环境准备
+
+- Node.js 22
+- Rust stable 工具链
+- npm
+- 系统 Git（Windows 使用 Git for Windows）
+
+安装依赖并启动桌面开发环境：
+
+```bash
+npm ci
 npm run tauri dev
 ```
 
-核心链路集成验证会通过真实系统节点执行 `git ls-remote`，并使用隔离的临时 Git 全局配置串联验证路由、配置注册、Git 实际地址解析、持久化、诊断脱敏、使用日志和恢复直连。该测试需要网络，但不会修改开发机的 `~/.gitconfig`：
+### 测试命令
 
-```bash
-npm run test:integration
-```
+| 命令 | 用途 |
+| --- | --- |
+| `npm test` | 前端单元测试 |
+| `npm run test:scripts` | 版本与发布脚本测试 |
+| `cargo test --manifest-path src-tauri/Cargo.toml` | Rust 单元测试 |
+| `npm run test:ui` | Playwright 桌面界面测试 |
+| `npm run test:integration` | 使用真实系统节点和 `git ls-remote` 的核心链路集成测试，需要网络 |
+| `npm run test:all` | 前端、脚本、Rust 和界面测试；不包含需要网络的集成测试 |
 
-提交前运行全部前端单元测试、Rust 测试和桌面界面测试：
+集成测试使用隔离的临时 Git 全局配置，不会修改开发机的 `~/.gitconfig`。
 
-```bash
-npm run test:all
-```
+### 构建安装包
 
-Rust 单元测试：
-
-```bash
-cargo test --manifest-path src-tauri/Cargo.toml
-```
-
-构建 macOS App / DMG：
+在 Apple Silicon Mac 上构建 `.app` 和 `.dmg`：
 
 ```bash
 npm run tauri -- build --target aarch64-apple-darwin
 ```
 
-在 64 位 Windows 10/11 上构建 NSIS / MSI 安装包：
+在 64 位 Windows 10/11 上构建 NSIS 和 MSI 安装包：
 
 ```powershell
 npm ci
 npm run build:windows
 ```
 
-Windows 需要先安装 Git for Windows。安装包默认按当前用户安装；WebView2 缺失时由安装器静默引导安装。产物位于 `src-tauri/target/x86_64-pc-windows-msvc/release/bundle/`。
+### 版本管理与发布
 
-## 版本与发布
-
-`package.json` 是应用版本的唯一来源，Tauri 安装包和设置页都会读取这个版本。开始新的开发版本时运行：
+`package.json` 是应用版本的唯一来源。设置开发版本：
 
 ```bash
 npm run version:set -- 0.3.0-dev.0
 ```
 
-正式发布必须在已与 `origin/main` 同步的干净 `main` 分支上运行：
+正式发布前，确认当前分支是 `main`、工作区没有未提交修改，并已与 `origin/main` 同步：
 
 ```bash
 npm run release -- 0.3.0
 ```
 
-发布命令会把应用版本更新为稳定版本，创建版本提交和 annotated tag，并原子推送 `main` 与 tag。tag 推送后，GitHub Actions 会再次校验 tag 与 `package.json` 一致，再构建 Draft Release。已有 tag 不会被覆盖或移动。
+脚本会检查仓库状态、更新版本、创建发布提交和 annotated tag，再原子推送 `main` 与 tag。GitHub Actions 随后构建 macOS 和 Windows 安装包，并创建 Draft Release。检查安装包后，还需要在 GitHub 上手动发布。
 
-系统节点目录源文件为仓库根目录的 `nodes.enc.json`，主发布地址为 `https://cdn.jsdelivr.net/gh/DiscoverBox/gitboost@main/nodes.enc.json`，不可用时依次回退到 JSDMirror、Bili33 CDN 和 JSDMirror.com。文件使用 AES-256-GCM 加密，不直接包含代理域名；客户端解密并校验后才会更新本地缓存。由于解密密钥随开源客户端分发，这项措施用于避免静态目录直接暴露节点，并不用于抵抗客户端逆向。
+## 参与项目
 
-更新系统节点时，先准备一个不提交到仓库的明文 URL 数组，再生成发布文件：
+问题和建议请提交到 [GitHub Issues](https://github.com/DiscoverBox/gitboost/issues)：
 
-```bash
-node scripts/encrypt-nodes.mjs /path/to/plain-nodes.json nodes.enc.json
-```
+- 提供镜像来源时，请附上服务名称、公开主页或来源地址、可供验证的 GitHub HTTPS 示例、使用限制和已知风险。候选线路会经过真实的 `git ls-remote` 检测。
+- 提交 Bug 时，请写明操作系统、GitBoost 版本、复现步骤、预期结果和实际结果。线路或 Git 配置问题可以附上“环境诊断”生成的脱敏报告。不要提交 Token、私有仓库地址或其他敏感信息。
+- 提交代码时，请保持改动聚焦，并为新增或修复的行为补充测试。
 
-数据保存在系统的应用数据目录 `pro.gitboost.desktop` 下。`system-nodes.json` 保存最近一次有效的系统节点目录，`nodes.json` 只保存用户自定义节点。恢复操作只删除 GitBoost 自己注册的 `include.path` 并清空自己的重写规则，不修改任何仓库的 remote。
+## License
 
-“使用日志”要求 GitBoost 正在运行，只保留最近 7 天的脱敏记录。关闭使用日志不会关闭自动故障复检，也不会写入使用记录。应用退出后加速配置仍然有效，但没有本地 Socket 接收 Trace2 事件，因此退出期间的 Git 操作不会补记，也无法根据实际 Git 失败自动换线；Socket 不可用不会阻断 Git 命令。
+本项目采用 [**GNU General Public License v3.0（GPL-3.0）**](LICENSE) 开源。
