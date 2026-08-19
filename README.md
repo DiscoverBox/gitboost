@@ -2,6 +2,8 @@
 
 GitBoost 是一个 macOS / Windows 桌面工具：用户继续使用原始 `https://github.com/...` 地址，应用通过 Git 原生 URL 重写，把公开仓库的读取临时切到本机自动选择的加速线路。push 默认保持 GitHub 直连；显式 `pushurl` 会在诊断中告警。
 
+第一次使用请参阅 [GitBoost 使用教程](docs/USER_GUIDE.md)。
+
 当前交付支持 Apple Silicon（arm64）macOS，以及 64 位 Windows 10/11（x86_64）。macOS 不构建 Intel 或 Universal 版本。
 
 ## 当前实现
