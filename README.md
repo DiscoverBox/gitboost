@@ -74,6 +74,14 @@ GitBoost 不提供代理服务。它只检测第三方线路，并通过独立�
 >
 > macOS 包未使用 Apple Developer ID 证书签名，也未经过 Apple 公证。Windows 包未配置发布者代码签名，可能显示“发布者未知”或触发 SmartScreen。请只从本项目的 [GitHub Releases](https://github.com/DiscoverBox/gitboost/releases) 下载。
 
+### Code signing policy
+
+GitBoost 正在申请 SignPath Foundation 的开源代码签名服务。申请和接入完成前，Windows 安装包仍按未签名软件处理；只有 Windows 显示 Authenticode 签名有效的发布包才可视为已签名。
+
+Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+
+签名范围、负责人、可验证构建流程和隐私说明见 [Code signing policy](CODE_SIGNING_POLICY.md)。
+
 ## 用户手册
 
 安装、首次启用、线路确认、环境诊断和恢复配置见 [GitBoost 用户手册](docs/USER_GUIDE.md)。

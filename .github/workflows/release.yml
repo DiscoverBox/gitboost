@@ -65,6 +65,14 @@ jobs:
 
             - macOS: Apple Silicon DMG
             - Windows: NSIS EXE / MSI
+
+            ## Code signing policy
+
+            GitBoost is applying for the SignPath Foundation open-source code-signing program. Treat an artifact as signed only when its Authenticode signature verifies successfully.
+
+            Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+
+            See the [Code signing policy](https://github.com/DiscoverBox/gitboost/blob/main/CODE_SIGNING_POLICY.md).
           releaseDraft: true
           prerelease: false
           args: --target ${{ matrix.target }}
