@@ -65,6 +65,59 @@ test("settings remain scrollable without showing a scrollbar", async ({ page }) 
   await expect(page.locator(".about-line")).toBeInViewport();
 });
 
+test("Windows uses stable native typography without changing desktop geometry", async ({ browser }) => {
+  const context = await browser.newContext({
+    userAgent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140.0.0.0 Safari/537.36",
+    viewport: { width: 1100, height: 760 },
+  });
+  const page = await context.newPage();
+  await page.goto("/");
+
+  const shell = page.locator(".app-shell");
+  await expect(shell).toHaveClass(/app-shell--native-titlebar/);
+  await expect(page.locator("[data-tauri-drag-region]")).toHaveCount(0);
+  await expect(page.locator(".sidebar")).toHaveCSS("padding-top", "25px");
+  await expect(page.locator(".main-content")).toHaveCSS("padding-top", "0px");
+  await expect(page.locator(".status-board")).toHaveCSS("min-height", "175px");
+
+  const typography = await shell.evaluate((element) => {
+    const shellStyles = getComputedStyle(element);
+    const headingStyles = getComputedStyle(element.querySelector(".page-header h1")!);
+    const authorMetaStyles = getComputedStyle(element.querySelector(".author-link small")!);
+    const statusDetailStyles = getComputedStyle(element.querySelector(".status-primary p")!);
+    const footnoteStyles = getComputedStyle(element.querySelector(".page-footnote")!);
+    return {
+      ui: shellStyles.fontFamily,
+      display: headingStyles.fontFamily,
+      mono: shellStyles.getPropertyValue("--font-mono").trim(),
+      textMeta: shellStyles.getPropertyValue("--text-meta").trim(),
+      textLabel: shellStyles.getPropertyValue("--text-label").trim(),
+      textBodySmall: shellStyles.getPropertyValue("--text-body-small").trim(),
+      authorMetaSize: authorMetaStyles.fontSize,
+      statusDetailSize: statusDetailStyles.fontSize,
+      footnoteSize: footnoteStyles.fontSize,
+      sidebarWidth: element.querySelector(".sidebar")!.getBoundingClientRect().width,
+    };
+  });
+
+  expect(typography.ui).toContain("Segoe UI Variable Text");
+  expect(typography.display).toContain("Segoe UI Variable Display");
+  expect(typography.mono).toContain("Cascadia Mono");
+  expect(typography.textMeta).toBe("10px");
+  expect(typography.textLabel).toBe("11px");
+  expect(typography.textBodySmall).toBe("12px");
+  expect(typography.authorMetaSize).toBe("10px");
+  expect(typography.statusDetailSize).toBe("12px");
+  expect(typography.footnoteSize).toBe("11px");
+  expect(typography.sidebarWidth).toBe(228);
+
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await expect(page.locator(".setting-row p").first()).toHaveCSS("font-size", "12px");
+  await expect(page.locator(".about-line")).toHaveCSS("font-size", "10px");
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(1100);
+  await context.close();
+});
+
 test("system node refresh reports whether the catalog changed", async ({ page }) => {
   await page.addInitScript(() => {
     const snapshot: AppSnapshot = {
