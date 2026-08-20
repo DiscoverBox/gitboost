@@ -1,8 +1,14 @@
 # GitBoost
 
-GitBoost 为公开 GitHub 仓库选择可用的 HTTPS 加速线路。仓库里的 `origin` 仍然是 `https://github.com/...`，更换线路时不用修改 remote。
+GitBoost 为公开 GitHub 仓库选择可用的 HTTPS 加速线路。仓库里的 `origin` 仍然是 `https://github.com/...`，更换线路时不用修改 remote；GitBoost 写入的规则默认让 push 直连 GitHub。
 
 > GitBoost 只适合加速公开仓库。第三方镜像能够看到仓库路径和传输内容，请勿用它访问私有仓库或传输敏感信息。
+
+## 下载与开始使用
+
+从 [GitHub Releases](https://github.com/DiscoverBox/gitboost/releases) 下载适合当前系统的安装包。第一次使用时，请按 [GitBoost 用户指南](docs/USER_GUIDE.md) 完成安装、路由清单设置和线路确认。
+
+![GitBoost 运行总览](docs/images/guide-overview.png)
 
 ## 为什么要做 GitBoost
 
@@ -81,10 +87,6 @@ GitBoost 正在申请 SignPath Foundation 的开源代码签名服务。申请�
 Free code signing provided by SignPath.io, certificate by SignPath Foundation.
 
 签名范围、负责人、可验证构建流程和隐私说明见 [Code signing policy](CODE_SIGNING_POLICY.md)。
-
-## 用户手册
-
-安装、首次启用、线路确认、环境诊断和恢复配置见 [GitBoost 用户手册](docs/USER_GUIDE.md)。
 
 ## 开发与版本发布
 
