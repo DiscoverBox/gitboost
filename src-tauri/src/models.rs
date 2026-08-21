@@ -190,6 +190,22 @@ pub struct DownloadTarget {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct DownloadFailure {
+    pub message: String,
+    pub detail: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DownloadAttempt {
+    pub target: DownloadTarget,
+    pub attempted_node_ids: Vec<String>,
+    pub has_remaining: bool,
+    pub failure: Option<DownloadFailure>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DiagnosticReport {
     pub generated_at: DateTime<Utc>,
     pub git_path: Option<String>,

@@ -52,17 +52,6 @@ impl From<&str> for CommandError {
     }
 }
 
-impl From<downloads::DownloadOpenError> for CommandError {
-    fn from(error: downloads::DownloadOpenError) -> Self {
-        match error {
-            downloads::DownloadOpenError::Probe { node_name, detail } => {
-                Self::detailed(format!("无法通过 {node_name} 获取此文件"), detail)
-            }
-            downloads::DownloadOpenError::Browser(message) => message.into(),
-        }
-    }
-}
-
 type CommandResult<T> = Result<T, CommandError>;
 
 fn project_link(target: &str) -> CommandResult<&'static str> {
@@ -336,26 +325,36 @@ fn set_usage_logging(core: State<'_, AppCore>, enabled: bool) -> CommandResult<A
 }
 
 #[tauri::command]
-fn prepare_download(
-    core: State<'_, AppCore>,
-    original_url: String,
-    excluded_node_ids: Vec<String>,
-) -> CommandResult<DownloadTarget> {
-    core.prepare_download_excluding(&original_url, &excluded_node_ids)
-        .map_err(Into::into)
-}
-
-#[tauri::command]
 async fn open_download(
     core: State<'_, AppCore>,
     original_url: String,
-    node_id: String,
-) -> CommandResult<DownloadTarget> {
-    let target = core.prepare_download_with_node(&original_url, &node_id)?;
-    tauri::async_runtime::spawn_blocking(move || downloads::probe_and_open(target))
-        .await
-        .map_err(|error| CommandError::detailed("下载探测任务异常结束", error.to_string()))?
-        .map_err(Into::into)
+    excluded_node_ids: Vec<String>,
+) -> CommandResult<DownloadAttempt> {
+    let (targets, has_remaining) =
+        core.prepare_download_batch(&original_url, &excluded_node_ids)?;
+    tauri::async_runtime::spawn_blocking(move || -> CommandResult<DownloadAttempt> {
+        let target_count = targets.len();
+        let failed_target = targets.last().cloned().expect("下载候选不能为空");
+        match downloads::probe_first_available(targets) {
+            Ok((target, attempted_node_ids)) => Ok(DownloadAttempt {
+                target: downloads::open_target(target)?,
+                has_remaining: has_remaining || attempted_node_ids.len() < target_count,
+                attempted_node_ids,
+                failure: None,
+            }),
+            Err(failure) => Ok(DownloadAttempt {
+                target: failed_target,
+                attempted_node_ids: failure.attempted_node_ids,
+                has_remaining,
+                failure: Some(DownloadFailure {
+                    message: format!("无法通过 {} 获取此文件", failure.error.node_name),
+                    detail: failure.error.detail,
+                }),
+            }),
+        }
+    })
+    .await
+    .map_err(|error| CommandError::detailed("下载任务异常结束", error.to_string()))?
 }
 
 #[tauri::command]
@@ -589,7 +588,6 @@ pub fn run() {
             clear_logs,
             get_usage_log,
             set_usage_logging,
-            prepare_download,
             open_download,
             open_project_link,
         ])
@@ -626,24 +624,6 @@ mod tests {
         assert_eq!(
             serde_json::to_value(CommandError::from("地址无效")).unwrap(),
             serde_json::json!({ "message": "地址无效", "detail": null })
-        );
-        let probe_error: CommandError = crate::downloads::DownloadOpenError::Probe {
-            node_name: "Node One".into(),
-            detail: "connection refused".into(),
-        }
-        .into();
-        assert_eq!(
-            serde_json::to_value(probe_error).unwrap(),
-            serde_json::json!({
-                "message": "无法通过 Node One 获取此文件",
-                "detail": "connection refused"
-            })
-        );
-        let browser_error: CommandError =
-            crate::downloads::DownloadOpenError::Browser("默认浏览器未能打开地址".into()).into();
-        assert_eq!(
-            serde_json::to_value(browser_error).unwrap(),
-            serde_json::json!({ "message": "默认浏览器未能打开地址", "detail": null })
         );
     }
 

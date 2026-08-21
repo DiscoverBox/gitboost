@@ -97,6 +97,13 @@ export interface DownloadTarget {
   nodeName: string;
 }
 
+export interface DownloadAttempt {
+  target: DownloadTarget;
+  attemptedNodeIds: string[];
+  hasRemaining: boolean;
+  failure: { message: string; detail: string } | null;
+}
+
 export interface UsageEvent {
   id: string;
   occurredAt: string;

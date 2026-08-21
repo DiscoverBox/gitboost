@@ -40,8 +40,8 @@ test("core desktop workflow is navigable", async ({ page }) => {
 
   await page.getByRole("button", { name: "文件下载", exact: true }).click();
   await expect(page.getByRole("heading", { name: "文件下载", exact: true })).toBeVisible();
-  await expect(page.getByLabel("GitHub 地址")).toHaveAttribute("placeholder", "https://github.com/owner/repository/...");
-  await expect(page.getByText("支持 github.com 下的任意公开路径。")).toBeVisible();
+  await expect(page.getByLabel("GitHub 地址")).toHaveAttribute("placeholder", "https://github.com/... 或 https://raw.githubusercontent.com/...");
+  await expect(page.getByText("支持 github.com 和 raw.githubusercontent.com 下的公开地址。")).toBeVisible();
   await expect(page.getByText("节点失败时不会静默改为 GitHub 直连。")).toBeVisible();
 
   await page.getByRole("button", { name: "使用日志", exact: true }).click();
@@ -145,11 +145,13 @@ test("system node refresh reports whether the catalog changed", async ({ page })
   await expect(page.locator(".toast")).toHaveText("系统线路已是最新");
 });
 
-test("file download can retry with the next available line", async ({ page }) => {
+test("raw file download keeps unattempted lines after the first line succeeds", async ({ page }) => {
   await page.addInitScript(() => {
     const nodes: AppSnapshot["nodes"] = [
       { id: "node-one", name: "Node One", rewriteBase: "https://one.example/https://github.com/", enabled: true, builtIn: false, health: { status: "available", inAutoPool: true, successCount: 2, attemptCount: 2, medianLatencyMs: 20, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } },
-      { id: "node-two", name: "Node Two", rewriteBase: "https://two.example/https://github.com/", enabled: true, builtIn: false, health: { status: "slow", inAutoPool: true, successCount: 1, attemptCount: 1, medianLatencyMs: 80, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } },
+      { id: "node-two", name: "Node Two", rewriteBase: "https://two.example/https://github.com/", enabled: true, builtIn: false, health: { status: "available", inAutoPool: true, successCount: 2, attemptCount: 2, medianLatencyMs: 30, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } },
+      { id: "node-three", name: "Node Three", rewriteBase: "https://three.example/https://github.com/", enabled: true, builtIn: false, health: { status: "available", inAutoPool: true, successCount: 2, attemptCount: 2, medianLatencyMs: 40, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } },
+      { id: "node-four", name: "Node Four", rewriteBase: "https://four.example/https://github.com/", enabled: true, builtIn: false, health: { status: "slow", inAutoPool: true, successCount: 1, attemptCount: 2, medianLatencyMs: 80, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } },
     ];
     const snapshot: AppSnapshot = {
       settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null, consentAcknowledgedAt: null },
@@ -158,20 +160,19 @@ test("file download can retry with the next available line", async ({ page }) =>
       environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
     };
     const calls: { command: string; args: Record<string, unknown> }[] = [];
-    const target = (node: AppSnapshot["nodes"][number]) => ({ originalUrl: "https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip", acceleratedUrl: `${node.rewriteBase}DiscoverBox/gitboost/archive/refs/heads/main.zip`, fileName: "main.zip", nodeId: node.id, nodeName: node.name });
+    const originalUrl = "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh";
+    const target = (node: AppSnapshot["nodes"][number]) => ({ originalUrl, acceleratedUrl: `${node.rewriteBase.replace("https://github.com/", "")}${originalUrl}`, fileName: "install.sh", nodeId: node.id, nodeName: node.name });
+    let attempt = 0;
     Object.assign(window, {
       __downloadCalls: calls,
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, unknown> = {}) => {
         if (command.startsWith("plugin:event|")) return undefined;
         calls.push({ command, args });
         if (command === "get_snapshot") return structuredClone(snapshot);
-        if (command === "prepare_download") {
-          const excluded = args.excludedNodeIds as string[];
-          return target(excluded.includes("node-one") ? nodes[1] : nodes[0]);
-        }
         if (command === "open_download") {
-          if (args.nodeId === "node-one") throw new Error("Node One 无法获取此文件");
-          return target(nodes[1]);
+          await new Promise((resolve) => setTimeout(resolve, 80));
+          const node = nodes[attempt++];
+          return { target: target(node), attemptedNodeIds: [node.id], hasRemaining: attempt < nodes.length, failure: null };
         }
         return structuredClone(snapshot);
       } },
@@ -180,22 +181,148 @@ test("file download can retry with the next available line", async ({ page }) =>
 
   await page.goto("/");
   await page.getByRole("button", { name: "文件下载", exact: true }).click();
-  await page.getByLabel("GitHub 地址").fill("https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip");
+  const input = page.getByLabel("GitHub 地址");
+  await input.fill("https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh");
   await page.getByRole("button", { name: "开始下载" }).click();
 
-  await expect(page.locator(".toast")).toContainText("Node One 无法获取此文件");
+  await expect(input).toBeDisabled();
+  await expect(page.getByRole("button", { name: "检测线路…" })).toBeDisabled();
+  await expect(page.locator(".toast")).toHaveText("已通过 Node One 在浏览器中打开地址");
+  await expect(input).toBeEnabled();
   await expect(page.locator(".download-target").getByText("Node One", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "换线路重试" }).click();
   await expect(page.locator(".toast")).toHaveText("已通过 Node Two 在浏览器中打开地址");
   await expect(page.locator(".download-target").getByText("Node Two", { exact: true })).toBeVisible();
+  const calls = await page.evaluate(() => (window as typeof window & { __downloadCalls: { command: string; args: Record<string, unknown> }[] }).__downloadCalls);
+  expect(calls.filter(({ command }) => command === "open_download")).toEqual([
+    { command: "open_download", args: { originalUrl: "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh", excludedNodeIds: [] } },
+    { command: "open_download", args: { originalUrl: "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh", excludedNodeIds: ["node-one"] } },
+  ]);
+});
+
+test("raw file download keeps remaining lines after a failed fallback batch", async ({ page }) => {
+  await page.addInitScript(() => {
+    const nodes: AppSnapshot["nodes"] = Array.from({ length: 5 }, (_, index) => ({
+      id: `node-${index + 1}`,
+      name: `Node ${index + 1}`,
+      rewriteBase: `https://${index + 1}.example/https://github.com/`,
+      enabled: true,
+      builtIn: false,
+      health: { status: "available", inAutoPool: true, successCount: 2, attemptCount: 2, medianLatencyMs: 20 + index, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null },
+    }));
+    const snapshot: AppSnapshot = {
+      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null, consentAcknowledgedAt: null },
+      nodes,
+      routes: [],
+      environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
+    };
+    const calls: { command: string; args: Record<string, unknown> }[] = [];
+    const originalUrl = "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh";
+    const target = (node: AppSnapshot["nodes"][number]) => ({ originalUrl, acceleratedUrl: `${node.rewriteBase.replace("https://github.com/", "")}${originalUrl}`, fileName: "install.sh", nodeId: node.id, nodeName: node.name });
+    let attempt = 0;
+    Object.assign(window, {
+      __downloadCalls: calls,
+      __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, unknown> = {}) => {
+        if (command.startsWith("plugin:event|")) return undefined;
+        calls.push({ command, args });
+        if (command === "get_snapshot") return structuredClone(snapshot);
+        if (command === "open_download" && attempt++ === 0) return {
+          target: target(nodes[3]),
+          attemptedNodeIds: nodes.slice(0, 4).map((node) => node.id),
+          hasRemaining: true,
+          failure: { message: "无法通过 Node 4 获取此文件", detail: "HTTP 500" },
+        };
+        if (command === "open_download") return { target: target(nodes[4]), attemptedNodeIds: ["node-5"], hasRemaining: false, failure: null };
+        return structuredClone(snapshot);
+      } },
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "文件下载", exact: true }).click();
+  await page.getByLabel("GitHub 地址").fill("https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh");
+  await page.getByRole("button", { name: "开始下载" }).click();
+
+  await expect(page.locator(".toast")).toContainText("无法通过 Node 4 获取此文件");
+  await expect(page.getByText("本次检测的线路均未能获取此文件，可继续检测剩余线路。")).toBeVisible();
+  await page.getByRole("button", { name: "换线路重试" }).click();
+  await expect(page.locator(".toast")).toHaveText("已通过 Node 5 在浏览器中打开地址");
+  await expect(page.locator(".download-target").getByText("Node 5", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "换线路重试" })).toHaveCount(0);
 
   const calls = await page.evaluate(() => (window as typeof window & { __downloadCalls: { command: string; args: Record<string, unknown> }[] }).__downloadCalls);
-  expect(calls.filter(({ command }) => command === "prepare_download")).toEqual([
-    { command: "prepare_download", args: { originalUrl: "https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip", excludedNodeIds: [] } },
-    { command: "prepare_download", args: { originalUrl: "https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip", excludedNodeIds: ["node-one"] } },
+  expect(calls.filter(({ command }) => command === "open_download")).toEqual([
+    { command: "open_download", args: { originalUrl: "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh", excludedNodeIds: [] } },
+    { command: "open_download", args: { originalUrl: "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh", excludedNodeIds: ["node-1", "node-2", "node-3", "node-4"] } },
   ]);
-  expect(calls.filter(({ command }) => command === "open_download").map(({ args }) => args.nodeId)).toEqual(["node-one", "node-two"]);
+});
+
+test("another operation cannot replace an active download busy state", async ({ page }) => {
+  await page.addInitScript(() => {
+    const node: AppSnapshot["nodes"][number] = { id: "node-one", name: "Node One", rewriteBase: "https://one.example/https://github.com/", enabled: true, builtIn: false, health: { status: "available", inAutoPool: true, successCount: 2, attemptCount: 2, medianLatencyMs: 20, consecutiveFailures: 0, checkedAt: "2026-08-14T00:00:00Z", failureReason: null } };
+    const snapshot: AppSnapshot = {
+      settings: { schemaVersion: 1, accelerationEnabled: false, routeScope: "allowlist", currentNodeId: null, healthCheckMinutes: 30, launchAtLogin: false, logLevel: "info", usageLoggingEnabled: true, lastAppliedAt: null, consentAcknowledgedAt: null },
+      nodes: [node],
+      routes: [],
+      environment: { gitAvailable: true, gitPath: "/usr/bin/git", gitVersion: "git version 2.51.1", includeRegistered: false, configPath: "/tmp/gitboost.gitconfig", conflicts: 0, conflictScanError: null },
+    };
+    const originalUrl = "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh";
+    const target = { originalUrl, acceleratedUrl: `https://one.example/${originalUrl}`, fileName: "install.sh", nodeId: node.id, nodeName: node.name };
+    let settingsUpdates = 0;
+    let autostartEnabled = false;
+    let autostartEnables = 0;
+    let launchAtLoginUpdates = 0;
+    Object.assign(window, {
+      __settingsUpdates: () => settingsUpdates,
+      __autostartCalls: () => ({ autostartEnables, launchAtLoginUpdates }),
+      __finishDownload: undefined,
+      __TAURI_INTERNALS__: { invoke: async (command: string) => {
+        if (command.startsWith("plugin:event|")) return undefined;
+        if (command === "plugin:autostart|is_enabled") return autostartEnabled;
+        if (command === "plugin:autostart|enable") {
+          autostartEnabled = true;
+          autostartEnables += 1;
+          return undefined;
+        }
+        if (command === "get_snapshot") return structuredClone(snapshot);
+        if (command === "update_settings") {
+          settingsUpdates += 1;
+          return structuredClone(snapshot);
+        }
+        if (command === "update_launch_at_login") {
+          launchAtLoginUpdates += 1;
+          return structuredClone(snapshot);
+        }
+        if (command === "open_download") return new Promise((resolve) => {
+          (window as typeof window & { __finishDownload?: () => void }).__finishDownload = () => resolve({ target, attemptedNodeIds: [node.id], hasRemaining: false, failure: null });
+        });
+        return structuredClone(snapshot);
+      } },
+    });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "文件下载", exact: true }).click();
+  await page.getByLabel("GitHub 地址").fill("https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh");
+  await page.getByRole("button", { name: "开始下载" }).click();
+  await expect(page.getByLabel("GitHub 地址")).toBeDisabled();
+
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("button", { name: "保存设置" }).click();
+  await expect(page.locator(".toast")).toContainText("当前操作尚未完成，请稍候");
+  expect(await page.evaluate(() => (window as typeof window & { __settingsUpdates: () => number }).__settingsUpdates())).toBe(0);
+  await page.getByRole("switch", { name: "登录时启动" }).click();
+  await expect(page.locator(".toast")).toContainText("当前操作尚未完成，请稍候");
+  expect(await page.evaluate(() => (window as typeof window & { __autostartCalls: () => { autostartEnables: number; launchAtLoginUpdates: number } }).__autostartCalls())).toEqual({ autostartEnables: 0, launchAtLoginUpdates: 0 });
+
+  await page.getByRole("button", { name: "文件下载", exact: true }).click();
+  await expect(page.getByLabel("GitHub 地址")).toBeDisabled();
+  await page.evaluate(() => (window as typeof window & { __finishDownload?: () => void }).__finishDownload?.());
+  await expect(page.getByLabel("GitHub 地址")).toBeEnabled();
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  await page.getByRole("switch", { name: "登录时启动" }).click();
+  await expect(page.locator(".toast")).toHaveText("已设为登录时启动");
+  expect(await page.evaluate(() => (window as typeof window & { __autostartCalls: () => { autostartEnables: number; launchAtLoginUpdates: number } }).__autostartCalls())).toEqual({ autostartEnables: 1, launchAtLoginUpdates: 1 });
 });
 
 test("node detection shows usable-node target progress", async ({ page }) => {

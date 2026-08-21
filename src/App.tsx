@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
@@ -57,7 +57,7 @@ function ProjectAuthor({ onOpen }: { onOpen: () => void }) {
 
 function Button({ children, tone = "secondary", busy, busyLabel = "处理中…", ...props }: React.ButtonHTMLAttributes<HTMLButtonElement> & { tone?: "primary" | "secondary" | "danger" | "quiet"; busy?: boolean; busyLabel?: React.ReactNode }) {
   return (
-    <button className={`button button--${tone}`} disabled={busy || props.disabled} {...props}>
+    <button {...props} className={`button button--${tone}`} disabled={busy || props.disabled}>
       {busy ? busyLabel : children}
     </button>
   );
@@ -130,6 +130,7 @@ export default function App() {
   const [snapshot, setSnapshot] = useState<AppSnapshot | null>(null);
   const [page, setPage] = useState<PageKey>("overview");
   const [busy, setBusy] = useState<string | null>(null);
+  const busyRef = useRef<string | null>(null);
   const [nodeTestProgress, setNodeTestProgress] = useState<NodeTestProgress | null>(null);
   const [toast, setToast] = useState<{ kind: "success" | "error"; text: string; detail: string | null } | null>(null);
   const [importOpen, setImportOpen] = useState(false);
@@ -156,6 +157,12 @@ export default function App() {
   }, [toast]);
 
   const run = useCallback(async <T,>(key: string, operation: () => Promise<T>, message?: string | ((result: T) => string | undefined)) => {
+    if (busyRef.current) {
+      const error = new Error("当前操作尚未完成，请稍候");
+      setToast({ kind: "error", ...friendlyError(error) });
+      throw error;
+    }
+    busyRef.current = key;
     setBusy(key);
     try {
       const result = await operation();
@@ -170,7 +177,10 @@ export default function App() {
       setToast({ kind: "error", ...friendlyError(error) });
       throw error;
     } finally {
-      setBusy(null);
+      if (busyRef.current === key) {
+        busyRef.current = null;
+        setBusy(null);
+      }
       if (key === "test-all") setNodeTestProgress(null);
     }
   }, [reload]);
@@ -198,7 +208,7 @@ export default function App() {
       <main className="main-content">
         {page === "overview" && <Overview snapshot={snapshot} busy={busy} nodeTestProgress={nodeTestProgress} nodeTestRunning={nodeTestRunning} run={run} go={setPage} />}
         {page === "routes" && <Routes snapshot={snapshot} busy={busy} run={run} />}
-        {page === "downloads" && <Downloads snapshot={snapshot} busy={busy} run={run} />}
+        {page === "downloads" && <Downloads busy={busy} run={run} />}
         {page === "usage" && <UsageLogs snapshot={snapshot} busy={busy} run={run} />}
         {page === "diagnostics" && <Diagnostics snapshot={snapshot} busy={busy} />}
         {page === "settings" && <Settings snapshot={snapshot} busy={busy} nodeTestProgress={nodeTestProgress} nodeTestRunning={nodeTestRunning} run={run} onImport={() => setImportOpen(true)} />}
@@ -420,19 +430,21 @@ function Routes({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: string |
   );
 }
 
-function Downloads({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: string | null; run: Runner }) {
+function Downloads({ busy, run }: { busy: string | null; run: Runner }) {
   const [url, setUrl] = useState("");
   const [target, setTarget] = useState<DownloadTarget | null>(null);
   const [attemptedNodeIds, setAttemptedNodeIds] = useState<string[]>([]);
+  const [hasRemaining, setHasRemaining] = useState(false);
   const [lastAttemptFailed, setLastAttemptFailed] = useState(false);
-  const canRetry = snapshot.nodes.some((node) => node.enabled && node.health.inAutoPool && ["available", "slow"].includes(node.health.status) && !attemptedNodeIds.includes(node.id));
   const download = async () => {
     try {
       await run("download-open", async () => {
-        const next = await api.prepareDownload(url, attemptedNodeIds);
-        setTarget(next);
-        setAttemptedNodeIds((attempted) => [...attempted, next.nodeId]);
-        return api.openDownload(url, next.nodeId);
+        const result = await api.openDownload(url, attemptedNodeIds);
+        setTarget(result.target);
+        setAttemptedNodeIds((attempted) => [...attempted, ...result.attemptedNodeIds]);
+        setHasRemaining(result.hasRemaining);
+        if (result.failure) throw result.failure;
+        return result.target;
       }, (next) => `已通过 ${next.nodeName} 在浏览器中打开地址`);
       setLastAttemptFailed(false);
     } catch (error) {
@@ -444,22 +456,23 @@ function Downloads({ snapshot, busy, run }: { snapshot: AppSnapshot; busy: strin
     setUrl(value);
     setTarget(null);
     setAttemptedNodeIds([]);
+    setHasRemaining(false);
     setLastAttemptFailed(false);
   };
   return (
     <div className="page">
-      <PageHeader eyebrow="GitHub 地址" title="文件下载" description="粘贴公开 GitHub 地址；GitBoost 会先通过当前线路做小流量探测，再交给默认浏览器打开。" />
+      <PageHeader eyebrow="GitHub 地址" title="文件下载" description="粘贴公开 GitHub 或 Raw 地址；当前线路不可用时会自动检测其他线路，再交给默认浏览器打开。" />
       <section className="download-card">
         <label htmlFor="download-url">GitHub 地址</label>
         <div className="download-input">
-          <input id="download-url" value={url} onChange={(event) => changeUrl(event.target.value)} placeholder="https://github.com/owner/repository/..." spellCheck={false} onKeyDown={(event) => { if (event.key === "Enter" && url.trim()) download().catch(() => undefined); }} />
-          <Button tone="primary" busy={busy === "download-open"} disabled={!url.trim()} onClick={() => download().catch(() => undefined)}>开始下载</Button>
+          <input id="download-url" value={url} disabled={busy === "download-open"} onChange={(event) => changeUrl(event.target.value)} placeholder="https://github.com/... 或 https://raw.githubusercontent.com/..." spellCheck={false} onKeyDown={(event) => { if (event.key === "Enter" && url.trim()) download().catch(() => undefined); }} />
+          <Button tone="primary" busy={busy === "download-open"} busyLabel="检测线路…" disabled={!url.trim()} onClick={() => download().catch(() => undefined)}>开始下载</Button>
         </div>
         <p>只检查地址格式，不会直连 GitHub 验证文件；实际可用性由当前线路探测。</p>
       </section>
       <section className="section-block">
         <div className="section-title"><div><h2>下载线路</h2><p>下载操作独立于 Git 路由清单。节点失败时不会静默改为 GitHub 直连。</p></div></div>
-        {target ? <><dl className="download-target"><div><dt>目标</dt><dd>{target.fileName}</dd></div><div><dt>线路</dt><dd>{target.nodeName}</dd></div></dl>{canRetry ? <div className="download-retry"><p>{lastAttemptFailed ? "当前线路未能获取此文件，可尝试自动池中的下一条线路。" : "需要时可改用自动池中的下一条线路。"}</p><Button busy={busy === "download-open"} onClick={() => download().catch(() => undefined)}>换线路重试</Button></div> : lastAttemptFailed ? <div className="download-retry"><p>自动线路池中没有其他可用线路。</p></div> : null}</> : <div className="empty-state compact"><strong>等待 GitHub 地址</strong><p>支持 github.com 下的任意公开路径。</p></div>}
+        {target ? <><dl className="download-target"><div><dt>目标</dt><dd>{target.fileName}</dd></div><div><dt>线路</dt><dd>{target.nodeName}</dd></div></dl>{hasRemaining ? <div className="download-retry"><p>{lastAttemptFailed ? "本次检测的线路均未能获取此文件，可继续检测剩余线路。" : "需要时可改用自动池中的下一条线路。"}</p><Button busy={busy === "download-open"} busyLabel="检测线路…" onClick={() => download().catch(() => undefined)}>换线路重试</Button></div> : lastAttemptFailed ? <div className="download-retry"><p>自动线路池中的线路均无法获取此文件。</p></div> : null}</> : <div className="empty-state compact"><strong>等待 GitHub 地址</strong><p>支持 github.com 和 raw.githubusercontent.com 下的公开地址。</p></div>}
       </section>
       <footer className="page-footnote">第三方节点可以看到公开仓库路径和文件名。GitBoost 不支持带凭据、Token、查询参数或片段的地址。</footer>
     </div>
@@ -553,9 +566,11 @@ function Settings({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, onIm
   }, []);
   const saveNodes = async () => { const path = await save({ defaultPath: "gitboost-nodes.json", filters: [{ name: "JSON", extensions: ["json"] }] }); if (path) await run("export", () => api.exportNodes(path), "自定义节点已导出"); };
   const setAutostart = async (enabled: boolean) => {
-    enabled ? await enableAutostart() : await disableAutostart();
+    await run("autostart", async () => {
+      enabled ? await enableAutostart() : await disableAutostart();
+      return api.updateLaunchAtLogin(enabled);
+    }, enabled ? "已设为登录时启动" : "已关闭登录时启动");
     setLaunchAtLogin(enabled);
-    await run("autostart", () => api.updateLaunchAtLogin(enabled), enabled ? "已设为登录时启动" : "已关闭登录时启动");
   };
   return (
     <div className="page">

@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { AppSnapshot, DiagnosticReport, DownloadTarget, ImportResult, NodeEntry, RouteScope, UsageLogSnapshot } from "./types";
+import type { AppSnapshot, DiagnosticReport, DownloadAttempt, ImportResult, NodeEntry, RouteScope, UsageLogSnapshot } from "./types";
 
 const browserMock: AppSnapshot = {
   settings: {
@@ -95,8 +95,7 @@ export const api = {
   clearLogs: () => call<AppSnapshot>("clear_logs"),
   getUsageLog: () => inTauri() ? call<UsageLogSnapshot>("get_usage_log") : Promise.resolve(structuredClone(browserUsageMock)),
   setUsageLogging: (enabled: boolean) => call<AppSnapshot>("set_usage_logging", { enabled }),
-  prepareDownload: (originalUrl: string, excludedNodeIds: string[]) => call<DownloadTarget>("prepare_download", { originalUrl, excludedNodeIds }),
-  openDownload: (originalUrl: string, nodeId: string) => call<DownloadTarget>("open_download", { originalUrl, nodeId }),
+  openDownload: (originalUrl: string, excludedNodeIds: string[]) => call<DownloadAttempt>("open_download", { originalUrl, excludedNodeIds }),
   openProjectLink: async (target: keyof typeof projectLinks) => {
     if (inTauri()) return call<void>("open_project_link", { target });
     window.open(projectLinks[target], "_blank", "noopener,noreferrer");

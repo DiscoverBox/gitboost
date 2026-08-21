@@ -39,6 +39,7 @@ const MAX_SYSTEM_NODES: usize = 100;
 const CATALOG_MAX_BYTES: usize = 262_144;
 const NODE_TEST_CONCURRENCY: usize = 4;
 const AUTO_POOL_NODE_TARGET: usize = 10;
+const DOWNLOAD_BATCH_SIZE: usize = 4;
 const HEALTH_CHECK_INTERVALS: [u32; 6] = [
     0,
     60,
@@ -380,54 +381,49 @@ impl AppCore {
         })
     }
 
-    pub fn prepare_download_excluding(
+    pub fn prepare_download_batch(
         &self,
         original_url: &str,
         excluded_node_ids: &[String],
-    ) -> Result<DownloadTarget, String> {
+    ) -> Result<(Vec<DownloadTarget>, bool), String> {
         let settings = self.settings()?;
-        let pairs: Vec<_> = self
+        let mut pairs: Vec<_> = self
             .node_pairs()?
             .into_iter()
-            .filter(|(node, _)| !excluded_node_ids.contains(&node.id))
+            .filter(|(node, health)| {
+                !excluded_node_ids.contains(&node.id)
+                    && node.enabled
+                    && health.in_auto_pool
+                    && is_usable_health(health)
+            })
             .collect();
-        let current = settings.current_node_id.as_deref().and_then(|id| {
-            pairs
-                .iter()
-                .find(|(node, health)| {
-                    node.id == id && node.enabled && health.in_auto_pool && is_usable_health(health)
-                })
-                .map(|(node, _)| node)
-        });
-        let preferred = current.or_else(|| git::choose_node(&pairs));
-        let node = preferred.ok_or_else(|| {
-            if excluded_node_ids.is_empty() {
+        let mut targets = Vec::new();
+        while targets.len() < DOWNLOAD_BATCH_SIZE {
+            let selected = if targets.is_empty() {
+                settings
+                    .current_node_id
+                    .as_deref()
+                    .and_then(|id| pairs.iter().find(|(node, _)| node.id == id))
+                    .map(|(node, _)| node)
+                    .or_else(|| git::choose_node(&pairs))
+            } else {
+                git::choose_node(&pairs)
+            };
+            let Some(node) = selected else {
+                break;
+            };
+            targets.push(downloads::prepare_target(original_url, node)?);
+            let selected_id = node.id.clone();
+            pairs.retain(|(node, _)| node.id != selected_id);
+        }
+        if targets.is_empty() {
+            return Err(if excluded_node_ids.is_empty() {
                 "自动线路池中没有可用的下载节点".to_string()
             } else {
                 "自动线路池中没有其他可用的下载线路".to_string()
-            }
-        })?;
-        downloads::prepare_target(original_url, node)
-    }
-
-    pub fn prepare_download_with_node(
-        &self,
-        original_url: &str,
-        node_id: &str,
-    ) -> Result<DownloadTarget, String> {
-        let health = self.health()?;
-        let nodes = self.nodes()?;
-        let node = nodes
-            .iter()
-            .find(|node| {
-                node.id == node_id
-                    && node.enabled
-                    && health
-                        .get(&node.id)
-                        .is_some_and(|summary| summary.in_auto_pool && is_usable_health(summary))
-            })
-            .ok_or_else(|| "下载线路不在自动线路池中".to_string())?;
-        downloads::prepare_target(original_url, node)
+            });
+        }
+        Ok((targets, git::choose_node(&pairs).is_some()))
     }
 
     fn node_entries(&self) -> Result<Vec<NodeEntry>, String> {
@@ -3049,7 +3045,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let core = AppCore::new(directory.path().to_path_buf()).unwrap();
         let error = core
-            .prepare_download_excluding(
+            .prepare_download_batch(
                 "https://github.com/ollama/ollama/releases/download/v1/OllamaSetup.exe",
                 &[],
             )
@@ -3058,7 +3054,7 @@ mod tests {
     }
 
     #[test]
-    fn prepares_download_with_the_next_available_node_without_changing_settings() {
+    fn prepares_download_batch_without_changing_settings() {
         let directory = tempfile::tempdir().unwrap();
         let core = AppCore::new(directory.path().to_path_buf()).unwrap();
         core.import_nodes("https://one.example\nhttps://two.example")
@@ -3089,26 +3085,68 @@ mod tests {
         };
         atomic_write_json(&core.paths.settings, &settings).unwrap();
 
-        let target = core
-            .prepare_download_excluding(
+        let (targets, has_remaining) = core
+            .prepare_download_batch(
                 "https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip",
-                std::slice::from_ref(&first.id),
+                &[],
             )
             .unwrap();
 
-        assert_eq!(target.node_id, second.id);
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].node_id, first.id);
+        assert_eq!(targets[1].node_id, second.id);
+        assert!(!has_remaining);
         assert_eq!(
             core.settings().unwrap().current_node_id,
             Some(first.id.clone())
         );
         assert_eq!(
-            core.prepare_download_excluding(
+            core.prepare_download_batch(
                 "https://github.com/DiscoverBox/gitboost/archive/refs/heads/main.zip",
                 &[first.id.clone(), second.id.clone()],
             )
             .unwrap_err(),
             "自动线路池中没有其他可用的下载线路"
         );
+    }
+
+    #[test]
+    fn download_batch_keeps_unattempted_nodes_for_manual_retry() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let nodes = (1..=5)
+            .map(|index| {
+                custom_node(
+                    &format!("node-{index}"),
+                    &format!("Node {index}"),
+                    &format!("https://{index}.example/https://github.com/"),
+                )
+            })
+            .collect::<Vec<_>>();
+        configure_automatic_nodes(&core, &nodes, &nodes[0].id);
+
+        let (first_batch, has_remaining) = core
+            .prepare_download_batch(
+                "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh",
+                &[],
+            )
+            .unwrap();
+        assert_eq!(first_batch.len(), DOWNLOAD_BATCH_SIZE);
+        assert!(has_remaining);
+
+        let excluded = first_batch
+            .iter()
+            .map(|target| target.node_id.clone())
+            .collect::<Vec<_>>();
+        let (second_batch, has_remaining) = core
+            .prepare_download_batch(
+                "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh",
+                &excluded,
+            )
+            .unwrap();
+        assert_eq!(second_batch.len(), 1);
+        assert_eq!(second_batch[0].node_id, nodes[4].id);
+        assert!(!has_remaining);
     }
 
     #[test]
@@ -3553,6 +3591,50 @@ mod tests {
             65_536,
         )
         .unwrap();
+    }
+
+    #[test]
+    #[ignore = "requires live HTTPS and GitHub proxy access"]
+    fn live_download_batch_falls_back_after_a_real_http_failure() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let unavailable = custom_node(
+            "real-http-failure",
+            "Real HTTP failure",
+            "https://example.com/https://github.com/",
+        );
+        let fallback = NodeDefinition::fastgit();
+        configure_automatic_nodes(
+            &core,
+            &[unavailable.clone(), fallback.clone()],
+            &unavailable.id,
+        );
+
+        let (targets, has_remaining) = core
+            .prepare_download_batch(
+                "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh",
+                &[],
+            )
+            .unwrap();
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.node_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![unavailable.id.as_str(), fallback.id.as_str()]
+        );
+        assert!(!has_remaining);
+
+        let (winner, attempted_node_ids) = downloads::probe_first_available(targets).unwrap();
+        assert_eq!(winner.node_id, fallback.id);
+        assert_eq!(
+            attempted_node_ids,
+            vec![unavailable.id.clone(), fallback.id.clone()]
+        );
+        assert_eq!(
+            core.settings().unwrap().current_node_id,
+            Some(unavailable.id)
+        );
     }
 
     #[test]
