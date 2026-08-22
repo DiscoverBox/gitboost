@@ -1,0 +1,7 @@
+branch:
+  - reg: ^main$
+    buttons:
+      - name: 同步 GitHub Release 附件
+        description: 将当前版本的 GitHub Release 附件同步到 CNB
+        event: web_trigger
+        isDefault: true
