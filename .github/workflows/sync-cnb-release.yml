@@ -1,0 +1,38 @@
+name: Sync CNB Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  push-tag:
+    if: ${{ !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout released tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+
+      - name: Push released tag to CNB
+        env:
+          CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          askpass_path="$(mktemp)"
+          printf '%s\n' \
+            '#!/usr/bin/env bash' \
+            'case "$1" in' \
+            '  *Username*) printf "%s\n" "cnb" ;;' \
+            '  *) printf "%s\n" "$CNB_TOKEN" ;;' \
+            'esac' > "$askpass_path"
+          chmod 700 "$askpass_path"
+          trap 'rm -f "$askpass_path"' EXIT
+
+          GIT_ASKPASS="$askpass_path" GIT_TERMINAL_PROMPT=0 \
+            git push https://cnb.cool/DiscoverBox/gitboost.git \
+            "refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"

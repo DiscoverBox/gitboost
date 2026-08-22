@@ -1,3 +1,25 @@
+"v*":
+  tag_push:
+    - docker:
+        image: node:22-bookworm-slim
+      stages:
+        - name: 创建 CNB Release
+          type: git:release
+          options:
+            title: GitBoost $CNB_BRANCH
+            description: GitBoost $CNB_BRANCH 国内镜像附件
+            latest: true
+        - name: 从 GitHub Release 准备附件
+          script: node scripts/prepare-cnb-release-assets.mjs "$CNB_BRANCH"
+          exports:
+            release_tag: CNB_RELEASE_TAG
+        - name: 上传 CNB Release 附件
+          image: cnbcool/attachments:latest
+          settings:
+            tag: $CNB_RELEASE_TAG
+            attachments:
+              - ./dist/cnb-release/*
+
 main:
   web_trigger:
     - docker:
