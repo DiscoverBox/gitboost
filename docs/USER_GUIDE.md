@@ -50,7 +50,7 @@ https://github.com/owner/repository.git
 
 “全局加速”会让所有 GitHub HTTPS 读取经过第三方节点。Git 无法判断仓库是否公开；只有确定不会访问私有仓库时，才使用这个模式。
 
-清单按 URL 前缀匹配。例如，`owner/repo` 也可能匹配 `owner/repo-private`。如果公开仓库和私有仓库存在这种命名关系，不要把前者加入清单。
+清单沿用 Git `insteadOf` 的 URL 前缀匹配语义，不按仓库身份做精确匹配。例如，`owner/repo` 也可能匹配 `owner/repo-private`。这是当前系统的既定路由特性，不作为待修复问题；如果公开仓库和私有仓库存在这种命名关系，不要把前者加入清单。
 
 ### 第三步：开启加速
 

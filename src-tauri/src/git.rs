@@ -20,6 +20,12 @@ const SLOW_THRESHOLD_MS: u64 = 2_500;
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+#[derive(Clone, Copy)]
+enum GitEnvironment {
+    User,
+    AnonymousProbe,
+}
+
 pub fn git_version() -> Option<String> {
     run_git(["--version"], None, Duration::from_secs(5))
         .ok()
@@ -70,10 +76,11 @@ pub fn test_node(node: &NodeDefinition, previous: &HealthSummary) -> HealthSumma
     for _ in 0..2 {
         let started = Instant::now();
         let config = format!("url.{}.insteadOf=https://github.com/", node.rewrite_base);
-        let result = run_git(
+        let result = run_git_with_environment(
             ["-c", config.as_str(), "ls-remote", TEST_REPOSITORY, "HEAD"],
             None,
             COMMAND_TIMEOUT,
+            GitEnvironment::AnonymousProbe,
         );
         let elapsed = started.elapsed().as_millis() as u64;
         next.attempt_count = next.attempt_count.saturating_add(1);
@@ -483,25 +490,25 @@ fn affects_github_https(rewrite_prefix: &str) -> bool {
 }
 
 pub fn effective_urls(config_path: &Path, original_url: &str) -> Result<(String, String), String> {
-    effective_urls_with_global_config(config_path, original_url, None)
+    effective_urls_with_environment(config_path, original_url, GitEnvironment::User)
 }
 
 pub fn effective_urls_isolated(
     config_path: &Path,
     original_url: &str,
 ) -> Result<(String, String), String> {
-    effective_urls_with_global_config(config_path, original_url, Some(config_path))
+    effective_urls_with_environment(config_path, original_url, GitEnvironment::AnonymousProbe)
 }
 
-fn effective_urls_with_global_config(
+fn effective_urls_with_environment(
     config_path: &Path,
     original_url: &str,
-    global_config: Option<&Path>,
+    environment: GitEnvironment,
 ) -> Result<(String, String), String> {
     let temp = tempfile::tempdir().map_err(|error| format!("无法创建诊断目录：{error}"))?;
     let directory = temp.path().to_string_lossy();
     let include = format!("include.path={}", config_path.display());
-    let init = run_git_with_global_config(
+    let init = run_git_with_environment(
         [
             "-c",
             include.as_str(),
@@ -510,14 +517,14 @@ fn effective_urls_with_global_config(
             "init",
             "-q",
         ],
-        None,
+        Some(temp.path()),
         Duration::from_secs(8),
-        global_config,
+        environment,
     )?;
     if !init.status.success() {
         return Err(command_error(&init));
     }
-    let add = run_git_with_global_config(
+    let add = run_git_with_environment(
         [
             "-c",
             include.as_str(),
@@ -528,14 +535,14 @@ fn effective_urls_with_global_config(
             "origin",
             original_url,
         ],
-        None,
+        Some(temp.path()),
         Duration::from_secs(8),
-        global_config,
+        environment,
     )?;
     if !add.status.success() {
         return Err(command_error(&add));
     }
-    let fetch = run_git_with_global_config(
+    let fetch = run_git_with_environment(
         [
             "-c",
             include.as_str(),
@@ -545,11 +552,11 @@ fn effective_urls_with_global_config(
             "get-url",
             "origin",
         ],
-        None,
+        Some(temp.path()),
         Duration::from_secs(8),
-        global_config,
+        environment,
     )?;
-    let push = run_git_with_global_config(
+    let push = run_git_with_environment(
         [
             "-c",
             include.as_str(),
@@ -560,9 +567,9 @@ fn effective_urls_with_global_config(
             "--push",
             "origin",
         ],
-        None,
+        Some(temp.path()),
         Duration::from_secs(8),
-        global_config,
+        environment,
     )?;
     if !fetch.status.success() || !push.status.success() {
         return Err("无法解析 Git 有效地址".into());
@@ -679,32 +686,70 @@ fn run_git<const N: usize>(
     current_dir: Option<&Path>,
     timeout: Duration,
 ) -> Result<Output, String> {
-    run_git_with_global_config(args, current_dir, timeout, None)
+    run_git_with_environment(args, current_dir, timeout, GitEnvironment::User)
 }
 
-fn run_git_with_global_config<const N: usize>(
+fn run_git_with_environment<const N: usize>(
     args: [&str; N],
     current_dir: Option<&Path>,
     timeout: Duration,
-    global_config: Option<&Path>,
+    environment: GitEnvironment,
 ) -> Result<Output, String> {
+    let isolation = match environment {
+        GitEnvironment::User => None,
+        GitEnvironment::AnonymousProbe => {
+            let directory =
+                tempfile::tempdir().map_err(|error| format!("无法创建 Git 隔离目录：{error}"))?;
+            fs::write(directory.path().join("global.gitconfig"), "")
+                .map_err(|error| format!("无法创建 Git 隔离配置：{error}"))?;
+            Some(directory)
+        }
+    };
     let mut command = Command::new("git");
-    // GitBoost's own probes and configuration checks are operational noise, not user traffic.
-    command.env("GIT_TRACE2_EVENT", "0");
     command
         .args(args)
+        // GitBoost's own probes and configuration checks are operational noise, not user traffic.
+        .env("GIT_TRACE2_EVENT", "0")
         .env("GIT_TERMINAL_PROMPT", "0")
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if let Some(config) = global_config {
+
+    if let Some(directory) = isolation.as_ref() {
+        for (key, _) in std::env::vars_os() {
+            if key
+                .to_string_lossy()
+                .to_ascii_uppercase()
+                .starts_with("GIT_")
+            {
+                command.env_remove(key);
+            }
+        }
         command
-            .env("GIT_CONFIG_GLOBAL", config)
-            .env("GIT_CONFIG_NOSYSTEM", "1");
+            .env_remove("SSH_ASKPASS")
+            .env_remove("SSH_ASKPASS_REQUIRE")
+            .env("HOME", directory.path())
+            .env("USERPROFILE", directory.path())
+            .env("XDG_CONFIG_HOME", directory.path())
+            .env(
+                "GIT_CONFIG_GLOBAL",
+                directory.path().join("global.gitconfig"),
+            )
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", "credential.helper")
+            .env("GIT_CONFIG_VALUE_0", "")
+            .env("GIT_TRACE2_EVENT", "0")
+            .env("GIT_TERMINAL_PROMPT", "0");
     }
-    hide_console(&mut command);
     if let Some(directory) = current_dir {
         command.current_dir(directory);
+    } else if let Some(directory) = isolation.as_ref() {
+        command.current_dir(directory.path());
     }
+    if matches!(environment, GitEnvironment::AnonymousProbe) {
+        command.env_remove("HOMEDRIVE").env_remove("HOMEPATH");
+    }
+    hide_console(&mut command);
     let mut child = command
         .spawn()
         .map_err(|error| format!("无法启动系统 Git：{error}"))?;
@@ -801,41 +846,82 @@ mod tests {
 
     #[test]
     fn isolated_effective_urls_ignore_the_registered_live_config() {
+        const MARKER: &str = "GITBOOST_ISOLATED_URLS_CHILD";
+        if std::env::var_os(MARKER).is_none() {
+            let directory = tempfile::tempdir().unwrap();
+            let live = directory.path().join("live.gitconfig");
+            let global = directory.path().join("global.gitconfig");
+            fs::write(
+                &live,
+                "[url \"https://old.example/https://github.com/openai/codex\"]\n\tinsteadOf = https://github.com/openai/codex\n[credential]\n\thelper = inherited-helper\n",
+            )
+            .unwrap();
+            fs::write(
+                &global,
+                format!(
+                    "[include]\n\tpath = \"{}\"\n",
+                    escape_subsection(&live.to_string_lossy())
+                ),
+            )
+            .unwrap();
+            let status = Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "git::tests::isolated_effective_urls_ignore_the_registered_live_config",
+                    "--nocapture",
+                ])
+                .env(MARKER, "1")
+                .env("GIT_CONFIG_GLOBAL", &global)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env("GIT_CONFIG_COUNT", "2")
+                .env(
+                    "GIT_CONFIG_KEY_0",
+                    "url.https://dynamic.example/https://github.com/openai/codex.git.insteadOf",
+                )
+                .env("GIT_CONFIG_VALUE_0", "https://github.com/openai/codex.git")
+                .env("GIT_CONFIG_KEY_1", "credential.helper")
+                .env("GIT_CONFIG_VALUE_1", "dynamic-helper")
+                .env("GIT_DIR", directory.path().join("missing.git"))
+                .env("GIT_WORK_TREE", directory.path())
+                .env("GIT_ASKPASS", directory.path().join("missing-askpass"))
+                .env("SSH_ASKPASS", directory.path().join("missing-ssh-askpass"))
+                .status()
+                .unwrap();
+            assert!(status.success(), "isolated Git environment test failed");
+            return;
+        }
+
         let directory = tempfile::tempdir().unwrap();
-        let live = directory.path().join("live.gitconfig");
         let candidate = directory.path().join("candidate.gitconfig");
-        let global = directory.path().join("global.gitconfig");
-        fs::write(
-            &live,
-            "[url \"https://old.example/https://github.com/openai/codex\"]\n\tinsteadOf = https://github.com/openai/codex\n",
-        )
-        .unwrap();
         fs::write(
             &candidate,
             "[url \"https://new.example/https://github.com/openai/codex\"]\n\tinsteadOf = https://github.com/openai/codex\n",
         )
         .unwrap();
-        fs::write(
-            &global,
-            format!(
-                "[include]\n\tpath = \"{}\"\n",
-                escape_subsection(&live.to_string_lossy())
-            ),
-        )
-        .unwrap();
 
         let original = "https://github.com/openai/codex.git";
-        let (conflicted, _) =
-            effective_urls_with_global_config(&candidate, original, Some(&global)).unwrap();
-        assert_eq!(
-            conflicted,
-            "https://old.example/https://github.com/openai/codex.git"
-        );
-
         let (fetch, _) = effective_urls_isolated(&candidate, original).unwrap();
         assert_eq!(
             fetch,
             "https://new.example/https://github.com/openai/codex.git"
+        );
+
+        let helpers = run_git_with_environment(
+            ["config", "--get-all", "credential.helper"],
+            None,
+            Duration::from_secs(5),
+            GitEnvironment::AnonymousProbe,
+        )
+        .unwrap();
+        assert!(helpers.status.success());
+        assert_eq!(String::from_utf8_lossy(&helpers.stdout).trim(), "");
+
+        std::env::remove_var("GIT_DIR");
+        std::env::remove_var("GIT_WORK_TREE");
+        let (conflicted, _) = effective_urls(&candidate, original).unwrap();
+        assert_eq!(
+            conflicted,
+            "https://dynamic.example/https://github.com/openai/codex.git"
         );
     }
 

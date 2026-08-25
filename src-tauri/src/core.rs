@@ -3682,6 +3682,25 @@ mod tests {
 
         let catalog = fetch_system_catalog().unwrap();
         core.apply_system_catalog(&catalog).unwrap();
+
+        // Production probes must remain anonymous even when the launching user has
+        // a more-specific rewrite, repository context, or credential helper configured.
+        let clean_global = std::env::var_os("GIT_CONFIG_GLOBAL").unwrap();
+        let hostile_global = directory.path().join("hostile.gitconfig");
+        fs::write(
+            &hostile_global,
+            "[credential]\n\thelper = inherited-helper\n",
+        )
+        .unwrap();
+        std::env::set_var("GIT_CONFIG_GLOBAL", &hostile_global);
+        std::env::set_var("GIT_CONFIG_COUNT", "2");
+        std::env::set_var("GIT_CONFIG_KEY_0", "url.http://127.0.0.1:9/.insteadOf");
+        std::env::set_var("GIT_CONFIG_VALUE_0", TEST_REPOSITORY);
+        std::env::set_var("GIT_CONFIG_KEY_1", "credential.helper");
+        std::env::set_var("GIT_CONFIG_VALUE_1", "dynamic-helper");
+        std::env::set_var("GIT_DIR", directory.path().join("missing.git"));
+        std::env::set_var("GIT_WORK_TREE", directory.path());
+
         let progress = Mutex::new(Vec::new());
         let started = std::sync::Barrier::new(2);
         let release = std::sync::Barrier::new(2);
@@ -3705,6 +3724,20 @@ mod tests {
             core.test_all_nodes_or_join_with_progress(|_, _| {})
         })
         .unwrap();
+
+        std::env::set_var("GIT_CONFIG_GLOBAL", clean_global);
+        for key in [
+            "GIT_CONFIG_COUNT",
+            "GIT_CONFIG_KEY_0",
+            "GIT_CONFIG_VALUE_0",
+            "GIT_CONFIG_KEY_1",
+            "GIT_CONFIG_VALUE_1",
+            "GIT_DIR",
+            "GIT_WORK_TREE",
+        ] {
+            std::env::remove_var(key);
+        }
+
         let owner_result = owner_result.into_inner().unwrap().unwrap();
         assert_eq!(
             owner_result

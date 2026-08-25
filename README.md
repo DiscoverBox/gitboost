@@ -30,6 +30,8 @@ git clone https://github.com/owner/repository.git
 
 线路失效时在 GitBoost 中重新检测或切换节点即可，仓库里的 `origin` 不变。
 
+“仅加速清单”沿用 Git `insteadOf` 的 URL 前缀匹配语义，不按仓库身份做精确匹配。例如，加入 `owner/repo` 后，`owner/repo-private` 也可能命中同一条路由。这是当前系统的既定路由特性，不作为待修复问题；如果同一 owner 下存在名称前缀相同且可能包含私有内容的仓库，请不要添加该前缀较短的仓库。
+
 ### Claude Code 的 Plugin 也需要访问 GitHub
 
 [Claude Code Marketplace](https://code.claude.com/docs/en/plugin-marketplaces) 支持用 GitHub 的 `owner/repo` 作为来源。例如 [Superpowers Marketplace](https://github.com/obra/superpowers-marketplace) 的安装命令是：
