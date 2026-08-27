@@ -1,0 +1,35 @@
+docs/USER_GUIDE.md
+  s_5c475e36a95e32::t_b95f000b2ce0da 19-21
+README.md
+  s_5c475e36a95e32::t_b95f000b2ce0da 127,130
+  s_5c475e36a95e32::t_aabef195b377a0 131
+.github/workflows/release.yml
+  s_5c475e36a95e32::t_499b591317837a 19,22,63
+package.json
+  s_5c475e36a95e32::t_b95f000b2ce0da 17
+scripts/open-gitboost.command
+  s_5c475e36a95e32::t_25963ff123aae5 10,13-23
+  s_5c475e36a95e32::t_b95f000b2ce0da 1-9,11-12,24-37
+scripts/tauri-with-macos-helper.mjs
+  s_5c475e36a95e32::t_499b591317837a 120
+  s_5c475e36a95e32::t_b95f000b2ce0da 1-119,121-172
+scripts/tauri-with-macos-helper.test.mjs
+  s_5c475e36a95e32::t_b95f000b2ce0da 1-13,27-84
+  s_5c475e36a95e32::t_25963ff123aae5 14-26
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.0",
+  "base_commit_sha": "3c66d2c74aa494ba244522b1c37fa02d9eadfbb2",
+  "prompts": {},
+  "sessions": {
+    "s_5c475e36a95e32": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04115-030d-76a2-a8fc-d6b80dfbebf0",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
