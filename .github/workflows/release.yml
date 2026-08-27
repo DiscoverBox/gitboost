@@ -16,8 +16,10 @@ jobs:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
+            tauri_script: node scripts/tauri-with-macos-helper.mjs
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            tauri_script: npm run tauri
 
     runs-on: ${{ matrix.platform }}
 
@@ -58,6 +60,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          tauriScript: ${{ matrix.tauri_script }}
           tagName: ${{ github.ref_name }}
           releaseName: GitBoost ${{ github.ref_name }}
           releaseBody: |

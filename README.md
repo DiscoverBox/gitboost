@@ -124,8 +124,10 @@ npm run tauri dev
 在 Apple Silicon Mac 上构建 `.app` 和 `.dmg`：
 
 ```bash
-npm run tauri -- build --target aarch64-apple-darwin
+npm run build:macos
 ```
+
+生成的 DMG 还会包含“无法打开时请双击”安装助手。用户把 GitBoost 拖入“应用程序”后，可以运行该助手移除应用的 macOS 隔离标记。
 
 在 64 位 Windows 10/11 上构建 NSIS 和 MSI 安装包：
 

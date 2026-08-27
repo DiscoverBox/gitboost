@@ -16,7 +16,9 @@ Windows 要先安装 [Git for Windows](https://git-scm.com/download/win)。macOS
 
 请只从项目的 [Releases 页面](https://github.com/DiscoverBox/gitboost/releases)下载安装包。安装前核对来源和文件名，不要使用其他站点提供的版本。
 
-- macOS：打开 DMG，把 GitBoost 拖进“应用程序”。当前 macOS 版本没有使用 Apple Developer ID 证书签名，也没有经过 Apple 公证。确认安装包来自上述官方 Releases 页面，再打开终端执行：
+- macOS：打开 DMG，把 GitBoost 拖进“应用程序”。当前 macOS 版本没有使用 Apple Developer ID 证书签名，也没有经过 Apple 公证。确认安装包来自上述官方 Releases 页面，再双击 DMG 中的“无法打开时请双击”安装助手，按提示输入管理员密码。
+
+  如果安装助手也被 macOS 阻止，可以打开终端执行：
 
   ```bash
   sudo xattr -rd com.apple.quarantine /Applications/GitBoost.app

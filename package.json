@@ -14,6 +14,7 @@
     "test:all": "npm test && npm run test:scripts && cargo test --manifest-path src-tauri/Cargo.toml && npm run test:ui",
     "version:set": "node scripts/version.mjs set",
     "release": "node scripts/release.mjs",
+    "build:macos": "node scripts/tauri-with-macos-helper.mjs build --target aarch64-apple-darwin",
     "build:windows": "tauri build --target x86_64-pc-windows-msvc",
     "tauri": "tauri"
   },
