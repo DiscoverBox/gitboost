@@ -165,14 +165,16 @@ test("raw file download keeps unattempted lines after the first line succeeds", 
     const originalUrl = "https://raw.githubusercontent.com/iOfficeAI/OfficeCLI/main/install.sh";
     const target = (node: AppSnapshot["nodes"][number]) => ({ originalUrl, acceleratedUrl: `${node.rewriteBase.replace("https://github.com/", "")}${originalUrl}`, fileName: "install.sh", nodeId: node.id, nodeName: node.name });
     let attempt = 0;
+    let finishFirstDownload: (() => void) | undefined;
     Object.assign(window, {
       __downloadCalls: calls,
+      __finishFirstDownload: () => finishFirstDownload?.(),
       __TAURI_INTERNALS__: { invoke: async (command: string, args: Record<string, unknown> = {}) => {
         if (command.startsWith("plugin:event|")) return undefined;
         calls.push({ command, args });
         if (command === "get_snapshot") return structuredClone(snapshot);
         if (command === "open_download") {
-          await new Promise((resolve) => setTimeout(resolve, 80));
+          if (attempt === 0) await new Promise<void>((resolve) => { finishFirstDownload = resolve; });
           const node = nodes[attempt++];
           return { target: target(node), attemptedNodeIds: [node.id], hasRemaining: attempt < nodes.length, failure: null };
         }
@@ -189,6 +191,7 @@ test("raw file download keeps unattempted lines after the first line succeeds", 
 
   await expect(input).toBeDisabled();
   await expect(page.getByRole("button", { name: "检测线路…" })).toBeDisabled();
+  await page.evaluate(() => (window as typeof window & { __finishFirstDownload: () => void }).__finishFirstDownload());
   await expect(page.locator(".toast")).toHaveText("已通过 Node One 在浏览器中打开地址");
   await expect(input).toBeEnabled();
   await expect(page.locator(".download-target").getByText("Node One", { exact: true })).toBeVisible();
