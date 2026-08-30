@@ -10,6 +10,7 @@ export interface Settings {
   healthCheckMinutes: number;
   launchAtLogin: boolean;
   logLevel: "error" | "info" | "debug";
+  mcpEnabled: boolean;
   usageLoggingEnabled: boolean;
   lastAppliedAt: string | null;
   consentAcknowledgedAt: string | null;

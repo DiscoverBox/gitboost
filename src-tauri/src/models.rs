@@ -16,6 +16,8 @@ pub struct Settings {
     pub health_check_minutes: u32,
     pub launch_at_login: bool,
     pub log_level: String,
+    #[serde(default)]
+    pub mcp_enabled: bool,
     #[serde(default = "default_true")]
     pub usage_logging_enabled: bool,
     pub last_applied_at: Option<DateTime<Utc>>,
@@ -38,6 +40,7 @@ impl Default for Settings {
             health_check_minutes: DEFAULT_HEALTH_CHECK_MINUTES,
             launch_at_login: false,
             log_level: "info".into(),
+            mcp_enabled: false,
             usage_logging_enabled: true,
             last_applied_at: None,
             consent_acknowledged_at: None,

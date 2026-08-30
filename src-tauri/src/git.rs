@@ -131,6 +131,34 @@ pub fn test_node(node: &NodeDefinition, previous: &HealthSummary) -> HealthSumma
     next
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RepositoryProbeStatus {
+    Readable,
+    Empty,
+}
+
+pub fn probe_repository(
+    node: &NodeDefinition,
+    repository_url: &str,
+) -> Result<RepositoryProbeStatus, String> {
+    let config = format!("url.{}.insteadOf=https://github.com/", node.rewrite_base);
+    let output = run_git_with_environment(
+        ["-c", config.as_str(), "ls-remote", repository_url, "HEAD"],
+        None,
+        COMMAND_TIMEOUT,
+        GitEnvironment::AnonymousProbe,
+    )?;
+    if output.status.success() && valid_ls_remote(&output.stdout) {
+        Ok(RepositoryProbeStatus::Readable)
+    } else if output.status.success() && output.stdout.is_empty() {
+        Ok(RepositoryProbeStatus::Empty)
+    } else {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        Err(classify_failure(&format!("{stderr}\n{stdout}")))
+    }
+}
+
 fn valid_ls_remote(bytes: &[u8]) -> bool {
     let text = String::from_utf8_lossy(bytes);
     text.lines().any(|line| {

@@ -1013,6 +1013,53 @@ impl AppCore {
         self.snapshot()
     }
 
+    pub fn validate_route(&self, repository_url: &str) -> Result<String, String> {
+        self.validate_route_with(repository_url, git::probe_repository)
+    }
+
+    fn validate_route_with<F>(&self, repository_url: &str, mut probe: F) -> Result<String, String>
+    where
+        F: FnMut(&NodeDefinition, &str) -> Result<git::RepositoryProbeStatus, String>,
+    {
+        let normalized = normalize_repository_url(repository_url)?;
+        {
+            let _guard = self.lock.lock();
+            if self.settings()?.route_scope == RouteScope::Global {
+                return Err("全局加速无需配置项目清单".into());
+            }
+            if self
+                .routes()?
+                .iter()
+                .any(|route| route.repository_url == normalized)
+            {
+                return Err("该仓库已在清单中".into());
+            }
+        }
+
+        let mut candidates = self
+            .node_pairs()?
+            .into_iter()
+            .filter(|(node, health)| {
+                node.enabled && health.in_auto_pool && is_usable_health(health)
+            })
+            .collect::<Vec<_>>();
+        candidates.sort_by_key(|(_, health)| git::health_score(health));
+        if candidates.is_empty() {
+            return Err("没有通过真实 Git 检测的可用节点，请先在线路检测中完成测速".into());
+        }
+
+        for (node, _) in &candidates {
+            match probe(node, &normalized) {
+                Ok(git::RepositoryProbeStatus::Readable) => return Ok(normalized),
+                Ok(git::RepositoryProbeStatus::Empty) => {
+                    return Err("仓库尚无提交，请完成首次提交后再加入加速清单".into());
+                }
+                Err(_) => {}
+            }
+        }
+        Err("当前可用线路无法匿名读取该仓库，请确认它是公开仓库、检查地址或稍后重试".into())
+    }
+
     pub fn delete_route(&self, route_id: &str) -> Result<AppSnapshot, String> {
         let _guard = self.lock.lock();
         let mut routes = self.routes()?;
@@ -1155,6 +1202,14 @@ impl AppCore {
         let _guard = self.lock.lock();
         let mut settings = self.settings()?;
         settings.launch_at_login = enabled;
+        atomic_write_json(&self.paths.settings, &settings)?;
+        self.snapshot()
+    }
+
+    pub fn set_mcp_enabled(&self, enabled: bool) -> Result<AppSnapshot, String> {
+        let _guard = self.lock.lock();
+        let mut settings = self.settings()?;
+        settings.mcp_enabled = enabled;
         atomic_write_json(&self.paths.settings, &settings)?;
         self.snapshot()
     }
@@ -2816,6 +2871,199 @@ mod tests {
         let mut settings = Settings::default();
         assert!(core.select_current(&mut settings, &pairs).is_err());
         assert!(settings.current_node_id.is_none());
+    }
+
+    #[test]
+    fn validated_route_tries_healthy_nodes_in_score_order_before_saving() {
+        const MARKER: &str = "GITBOOST_VALIDATED_ROUTE_CHILD";
+        if rerun_with_isolated_git(
+            "core::tests::validated_route_tries_healthy_nodes_in_score_order_before_saving",
+            MARKER,
+        ) {
+            return;
+        }
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let faster = custom_node(
+            "faster",
+            "Faster",
+            "https://faster.example/https://github.com/",
+        );
+        let slower = custom_node(
+            "slower",
+            "Slower",
+            "https://slower.example/https://github.com/",
+        );
+        atomic_write_json(&core.paths.nodes, &vec![slower.clone(), faster.clone()]).unwrap();
+        atomic_write_json(
+            &core.paths.health,
+            &HashMap::from([
+                (
+                    faster.id.clone(),
+                    HealthSummary {
+                        status: NodeStatus::Available,
+                        in_auto_pool: true,
+                        success_count: 2,
+                        attempt_count: 2,
+                        median_latency_ms: Some(10),
+                        ..HealthSummary::default()
+                    },
+                ),
+                (
+                    slower.id.clone(),
+                    HealthSummary {
+                        status: NodeStatus::Slow,
+                        in_auto_pool: true,
+                        success_count: 2,
+                        attempt_count: 2,
+                        median_latency_ms: Some(100),
+                        ..HealthSummary::default()
+                    },
+                ),
+            ]),
+        )
+        .unwrap();
+        let mut attempted = vec![];
+
+        let normalized = core
+            .validate_route_with("openai/codex", |node, repository_url| {
+                attempted.push((node.id.clone(), repository_url.to_owned()));
+                if node.id == faster.id {
+                    Err("first node failed".into())
+                } else {
+                    Ok(git::RepositoryProbeStatus::Readable)
+                }
+            })
+            .unwrap();
+
+        assert_eq!(
+            attempted,
+            [
+                (
+                    "faster".into(),
+                    "https://github.com/openai/codex.git".into()
+                ),
+                (
+                    "slower".into(),
+                    "https://github.com/openai/codex.git".into()
+                )
+            ]
+        );
+        assert!(core.routes().unwrap().is_empty());
+        let snapshot = core.add_route(&normalized).unwrap();
+        assert_eq!(
+            snapshot.routes[0].repository_url,
+            "https://github.com/openai/codex.git"
+        );
+    }
+
+    #[test]
+    fn validated_route_does_not_save_when_all_mirrors_fail() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let node = custom_node(
+            "available",
+            "Available",
+            "https://available.example/https://github.com/",
+        );
+        atomic_write_json(&core.paths.nodes, &vec![node.clone()]).unwrap();
+        atomic_write_json(
+            &core.paths.health,
+            &HashMap::from([(
+                node.id,
+                HealthSummary {
+                    status: NodeStatus::Available,
+                    in_auto_pool: true,
+                    success_count: 2,
+                    attempt_count: 2,
+                    median_latency_ms: Some(10),
+                    ..HealthSummary::default()
+                },
+            )]),
+        )
+        .unwrap();
+
+        let error = core
+            .validate_route_with("openai/codex", |_, _| Err("unreachable".into()))
+            .unwrap_err();
+
+        assert!(error.contains("无法匿名读取"));
+        assert!(core.routes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn validated_route_rejects_an_empty_repository_without_trying_more_nodes() {
+        let directory = tempfile::tempdir().unwrap();
+        let core = AppCore::new(directory.path().to_path_buf()).unwrap();
+        let first = custom_node(
+            "first",
+            "First",
+            "https://first.example/https://github.com/",
+        );
+        let second = custom_node(
+            "second",
+            "Second",
+            "https://second.example/https://github.com/",
+        );
+        atomic_write_json(&core.paths.nodes, &vec![first.clone(), second.clone()]).unwrap();
+        atomic_write_json(
+            &core.paths.health,
+            &HashMap::from([
+                (
+                    first.id,
+                    HealthSummary {
+                        status: NodeStatus::Available,
+                        in_auto_pool: true,
+                        success_count: 2,
+                        attempt_count: 2,
+                        median_latency_ms: Some(10),
+                        ..HealthSummary::default()
+                    },
+                ),
+                (
+                    second.id,
+                    HealthSummary {
+                        status: NodeStatus::Available,
+                        in_auto_pool: true,
+                        success_count: 2,
+                        attempt_count: 2,
+                        median_latency_ms: Some(20),
+                        ..HealthSummary::default()
+                    },
+                ),
+            ]),
+        )
+        .unwrap();
+        let mut attempts = 0;
+
+        let error = core
+            .validate_route_with("owner/empty", |_, _| {
+                attempts += 1;
+                Ok(git::RepositoryProbeStatus::Empty)
+            })
+            .unwrap_err();
+
+        assert_eq!(error, "仓库尚无提交，请完成首次提交后再加入加速清单");
+        assert_eq!(attempts, 1);
+        assert!(core.routes().unwrap().is_empty());
+    }
+
+    #[test]
+    fn mcp_setting_persists_and_missing_values_default_to_disabled() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().to_path_buf();
+        let core = AppCore::new(root.clone()).unwrap();
+
+        assert!(core.set_mcp_enabled(true).unwrap().settings.mcp_enabled);
+        drop(core);
+        let core = AppCore::new(root.clone()).unwrap();
+        assert!(core.settings().unwrap().mcp_enabled);
+
+        let mut stored: serde_json::Value =
+            serde_json::from_slice(&fs::read(&core.paths.settings).unwrap()).unwrap();
+        stored.as_object_mut().unwrap().remove("mcpEnabled");
+        atomic_write_json(&core.paths.settings, &stored).unwrap();
+        assert!(!core.settings().unwrap().mcp_enabled);
     }
 
     #[test]

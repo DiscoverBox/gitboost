@@ -10,6 +10,7 @@ const browserMock: AppSnapshot = {
     healthCheckMinutes: 1440,
     launchAtLogin: false,
     logLevel: "info",
+    mcpEnabled: false,
     usageLoggingEnabled: true,
     lastAppliedAt: null,
     consentAcknowledgedAt: null,
@@ -91,6 +92,7 @@ export const api = {
   updateSettings: (healthCheckMinutes: number, logLevel: string) =>
     call<AppSnapshot>("update_settings", { healthCheckMinutes, logLevel }),
   updateLaunchAtLogin: (enabled: boolean) => call<AppSnapshot>("update_launch_at_login", { enabled }),
+  setMcpEnabled: (enabled: boolean) => call<AppSnapshot>("set_mcp_enabled", { enabled }),
   restoreGitConfig: () => call<AppSnapshot>("restore_git_config"),
   clearLogs: () => call<AppSnapshot>("clear_logs"),
   getUsageLog: () => inTauri() ? call<UsageLogSnapshot>("get_usage_log") : Promise.resolve(structuredClone(browserUsageMock)),

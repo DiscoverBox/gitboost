@@ -557,8 +557,10 @@ function Settings({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, onIm
   const [minutes, setMinutes] = useState(snapshot.settings.healthCheckMinutes);
   const [logLevel, setLogLevel] = useState(snapshot.settings.logLevel);
   const [launchAtLogin, setLaunchAtLogin] = useState(snapshot.settings.launchAtLogin);
+  const [mcpEnabled, setMcpEnabled] = useState(snapshot.settings.mcpEnabled);
   const [appVersion, setAppVersion] = useState(packageMetadata.version);
   useEffect(() => { autostartEnabled().then(setLaunchAtLogin).catch(() => undefined); }, []);
+  useEffect(() => { setMcpEnabled(snapshot.settings.mcpEnabled); }, [snapshot.settings.mcpEnabled]);
   useEffect(() => {
     getVersion().then((version) => {
       if (typeof version === "string") setAppVersion(version);
@@ -572,12 +574,17 @@ function Settings({ snapshot, busy, nodeTestProgress, nodeTestRunning, run, onIm
     }, enabled ? "已设为登录时启动" : "已关闭登录时启动");
     setLaunchAtLogin(enabled);
   };
+  const setMcp = async (enabled: boolean) => {
+    await run("mcp-toggle", () => api.setMcpEnabled(enabled), enabled ? "MCP 服务已开启" : "MCP 服务已关闭");
+    setMcpEnabled(enabled);
+  };
   return (
     <div className="page">
       <PageHeader eyebrow="本机偏好" title="设置" description="GitBoost 不上传使用数据；节点、健康状态和诊断日志均保存在本机。" actions={<Button tone="primary" busy={busy === "settings-save"} onClick={() => run("settings-save", () => api.updateSettings(minutes, logLevel), "设置已保存").catch(() => undefined)}>保存设置</Button>} />
       <section className="settings-list">
         <div className="setting-row"><div><strong>后台健康检查</strong><p>维护 10 条可用线路；不足时继续检测，找到 10 条后停止。</p></div><select value={minutes} onChange={(event) => setMinutes(Number(event.target.value))}><option value={0}>关闭</option><option value={60}>每小时</option><option value={480}>每 8 小时</option><option value={1440}>每天</option><option value={10080}>每周</option><option value={43200}>每月</option></select></div>
         <div className="setting-row"><div><strong>登录时启动</strong><p>保持托盘运行，以便节点失效后重新选路。</p></div><Switch label="登录时启动" checked={launchAtLogin} onChange={(enabled) => setAutostart(enabled).catch(() => undefined)} /></div>
+        <div className="setting-row"><div><strong>MCP 服务</strong><p>允许本机 MCP 客户端通过 http://127.0.0.1:38476/mcp 添加公开仓库。</p></div><Switch label="MCP 服务" checked={mcpEnabled} onChange={(enabled) => setMcp(enabled).catch(() => undefined)} /></div>
         <div className="setting-row"><div><strong>日志级别</strong><p>日志会移除凭据、查询参数和命令环境。</p></div><select value={logLevel} onChange={(event) => setLogLevel(event.target.value as "error" | "info" | "debug")}><option value="error">仅错误</option><option value="info">信息</option><option value="debug">调试</option></select></div>
       </section>
       <CustomNodeSettings snapshot={snapshot} busy={busy} nodeTestProgress={nodeTestProgress} nodeTestRunning={nodeTestRunning} run={run} onImport={onImport} />

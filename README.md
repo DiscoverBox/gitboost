@@ -69,6 +69,32 @@ flowchart LR
 
 GitBoost 不提供代理服务。它只检测第三方线路，并通过独立的 `gitboost.gitconfig` 接入系统 Git。设置、节点状态和脱敏后的使用日志都保存在本机。
 
+## MCP 自动添加公开仓库
+
+在 GitBoost 的“设置”页面开启 MCP 服务后，本机 MCP 客户端可以连接 `http://127.0.0.1:38476/mcp`，并使用 `add_accelerated_repository` 工具。该工具接受 `owner/repository` 或完整 GitHub HTTPS 地址，先通过当前健康线路执行不带用户凭据的匿名 Git 读取；至少一条线路成功后，才会把仓库加入“仅加速清单”。收到 MCP 取消通知，或 GitBoost 退出、在设置中关闭服务时，仍在验证阶段的调用不会新增清单项；服务关闭后，该地址立即停止监听。
+
+以支持远程 MCP 地址配置的客户端为例：
+
+```json
+{
+  "mcpServers": {
+    "gitboost": {
+      "url": "http://127.0.0.1:38476/mcp"
+    }
+  }
+}
+```
+
+macOS 和 Windows 使用相同的本机地址。工具参数示例：
+
+```json
+{
+  "repositoryUrl": "openai/codex"
+}
+```
+
+调用前应先在 GitBoost 中完成线路检测；这个工具只用于已确认公开且至少包含一个提交的仓库，不支持尚无提交、没有 `HEAD` 的空仓库，也不会读取 Token、Cookie、SSH Key 或 Credential Helper。没有健康线路、仓库为空、所有线路均无法匿名读取、仓库已经存在，或当前处于全局加速模式时，调用会返回明确错误并且不会新增清单项。
+
 ## 支持的系统
 
 | 系统 | 架构 | 安装包 |

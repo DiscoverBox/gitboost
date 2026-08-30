@@ -3,6 +3,7 @@ mod downloads;
 mod git;
 mod http;
 mod importer;
+mod mcp;
 mod models;
 mod storage;
 mod usage;
@@ -195,6 +196,24 @@ async fn refresh_system_nodes(app: tauri::AppHandle) -> CommandResult<bool> {
         run_node_test(move || worker_app.state::<AppCore>().refresh_system_nodes()).await?;
     refresh_tray_from_core(&app);
     Ok(result)
+}
+
+#[tauri::command]
+async fn set_mcp_enabled(app: tauri::AppHandle, enabled: bool) -> CommandResult<AppSnapshot> {
+    if enabled {
+        app.state::<mcp::McpServer>().start(app.clone()).await?;
+        match app.state::<AppCore>().set_mcp_enabled(true) {
+            Ok(snapshot) => Ok(snapshot),
+            Err(error) => {
+                app.state::<mcp::McpServer>().stop().await;
+                Err(error.into())
+            }
+        }
+    } else {
+        let snapshot = app.state::<AppCore>().set_mcp_enabled(false)?;
+        app.state::<mcp::McpServer>().stop().await;
+        Ok(snapshot)
+    }
 }
 
 #[tauri::command]
@@ -549,6 +568,7 @@ pub fn run() {
             let core =
                 AppCore::new(data_dir).map_err(|error| format!("GitBoost 初始化失败：{error}"))?;
             app.manage(core);
+            app.manage(mcp::McpServer::default());
             usage::start_listener(app.handle().clone());
             if let Err(error) = app.state::<AppCore>().refresh_registered_configuration() {
                 app.state::<AppCore>().configuration_refresh_failed(&error);
@@ -556,6 +576,9 @@ pub fn run() {
             install_tray(app)?;
             start_system_node_monitor(app.handle().clone());
             start_health_monitor(app.handle().clone());
+            if app.state::<AppCore>().snapshot()?.settings.mcp_enabled {
+                mcp::start_enabled_server(app.handle().clone());
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -572,6 +595,7 @@ pub fn run() {
             test_node,
             test_all_nodes,
             refresh_system_nodes,
+            set_mcp_enabled,
             rename_node,
             set_node_enabled,
             delete_node,
