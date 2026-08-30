@@ -41,7 +41,7 @@ impl<R: Runtime> GitBoostMcp<R> {
 
     #[tool(
         name = "add_accelerated_repository",
-        description = "Validate that a non-empty public GitHub repository can be read anonymously through a healthy GitBoost mirror, then add it to the acceleration allowlist. The repository must have at least one commit. Never use this for private repositories."
+        description = "Add a repository to GitBoost's local acceleration allowlist after validating that it can be read anonymously through a healthy GitBoost mirror. Use only when the user explicitly asks to add or accelerate a specific public GitHub repository. This changes the local GitBoost configuration. Do not call it merely to inspect, explain, clone, or troubleshoot a repository. Accepts owner/repository or a GitHub HTTPS URL; never use it for private, empty, or non-GitHub repositories."
     )]
     async fn add_accelerated_repository(
         &self,
@@ -97,7 +97,12 @@ impl<R: Runtime> ServerHandler for GitBoostMcp<R> {
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::from_build_env())
-            .with_instructions("仅将确认公开的 GitHub HTTPS 仓库加入 GitBoost 加速清单。")
+            .with_instructions(
+                "GitBoost MCP 仅管理本机 GitBoost 的公开 GitHub 仓库加速清单。\
+                 只有当用户明确要求把某个仓库加入 GitBoost 加速或允许列表时，才调用工具；\
+                 仅查看、分析、克隆、排查或泛泛提及仓库时不要调用。工具会修改本地清单。\
+                 仅接受公开、非空的 GitHub 仓库，禁止私有仓库和非 GitHub 地址。",
+            )
     }
 }
 
@@ -271,6 +276,16 @@ mod tests {
             let tools = client.list_tools(None).await.unwrap();
             assert_eq!(tools.tools.len(), 1);
             assert_eq!(tools.tools[0].name.as_ref(), "add_accelerated_repository");
+            let description = tools.tools[0].description.as_deref().unwrap();
+            assert!(description.contains("explicitly asks to add or accelerate"));
+            assert!(description.contains("Do not call it merely to inspect"));
+            assert!(description.contains("changes the local GitBoost configuration"));
+
+            let server_info = client.peer_info().unwrap();
+            let instructions = server_info.instructions.as_deref().unwrap();
+            assert!(instructions.contains("只有当用户明确要求"));
+            assert!(instructions.contains("仅查看、分析、克隆、排查或泛泛提及仓库时不要调用"));
+            assert!(instructions.contains("工具会修改本地清单"));
 
             let arguments = serde_json::from_value(serde_json::json!({
                 "repositoryUrl": "openai/codex"
