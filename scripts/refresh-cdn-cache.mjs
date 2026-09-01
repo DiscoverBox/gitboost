@@ -18,7 +18,7 @@ export async function refreshCdnCache({
   const cdnPath = `/gh/${repository}@${ref}/${filePath}`;
   const purgeUrl = `https://purge.jsdelivr.net${cdnPath}`;
   const jsDelivrUrl = `https://cdn.jsdelivr.net${cdnPath}`;
-  const mirrorUrl = `https://cdn.jsdmirror.cn${cdnPath}`;
+  const mirrorUrl = `https://cdn.jsdmirror.com${cdnPath}`;
   const expectedContent = await readFileImpl(filePath);
 
   const purgeResponse = await fetchImpl(purgeUrl);
@@ -60,15 +60,21 @@ export async function refreshCdnCache({
       contentMatches(mirrorUrl),
     ]);
 
-    if (jsDelivrReady && mirrorReady) {
-      log(`CDN cache refreshed: ${mirrorUrl}`);
+    if (jsDelivrReady) {
+      if (mirrorReady) {
+        log(`CDN cache refreshed: ${mirrorUrl}`);
+      } else {
+        log(
+          `::warning::JSDMirror cache is still stale; ` +
+            `jsDelivr has refreshed successfully: ${mirrorUrl}`,
+        );
+      }
       return;
     }
 
     if (attempt === maxAttempts) {
       throw new Error(
-        `CDN cache did not refresh after ${maxAttempts} checks ` +
-          `(jsDelivr: ${jsDelivrReady}, JSDMirror: ${mirrorReady})`,
+        `jsDelivr cache did not refresh after ${maxAttempts} checks`,
       );
     }
 

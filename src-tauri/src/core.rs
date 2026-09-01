@@ -25,9 +25,8 @@ use std::{
 use tempfile::NamedTempFile;
 use uuid::Uuid;
 
-const SYSTEM_NODE_CATALOG_URLS: [&str; 4] = [
+const SYSTEM_NODE_CATALOG_URLS: [&str; 3] = [
     "https://cdn.jsdelivr.net/gh/DiscoverBox/gitboost@main/nodes.enc.json",
-    "https://cdn.jsdmirror.cn/gh/DiscoverBox/gitboost@main/nodes.enc.json",
     "https://cdn.bili33.top/gh/DiscoverBox/gitboost@main/nodes.enc.json",
     "https://cdn.jsdmirror.com/gh/DiscoverBox/gitboost@main/nodes.enc.json",
 ];
