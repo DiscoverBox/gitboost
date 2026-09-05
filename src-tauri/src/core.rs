@@ -1529,16 +1529,20 @@ fn validate_configuration(
                     format!("{}{suffix}", node.rewrite_base),
                 ));
             }
-            let mut unlisted =
-                "https://github.com/gitboost-validation/not-in-allowlist.git".to_string();
-            while routes.iter().any(|route| {
-                route
-                    .repository_url
-                    .strip_suffix(".git")
-                    .is_some_and(|prefix| unlisted.starts_with(prefix))
-            }) {
-                unlisted.insert_str(unlisted.len() - 4, "-check");
-            }
+            // Each normalized route can match at most one of these distinct owners.
+            let unlisted = (0..=routes.len())
+                .map(|index| {
+                    format!("https://github.com/gitboost-validation-{index}/not-in-allowlist.git")
+                })
+                .find(|candidate| {
+                    !routes.iter().any(|route| {
+                        route
+                            .repository_url
+                            .strip_suffix(".git")
+                            .is_some_and(|prefix| candidate.starts_with(prefix))
+                    })
+                })
+                .ok_or_else(|| "无法构造清单外验证地址".to_string())?;
             checks.push((unlisted.clone(), unlisted));
         }
     }
@@ -2069,6 +2073,73 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.contains("octocat/Hello-World"));
+    }
+
+    #[test]
+    fn validates_allowlist_with_overlapping_validation_prefixes() {
+        let directory = tempfile::tempdir().unwrap();
+        let config_path = directory.path().join("candidate.gitconfig");
+        let node = NodeDefinition::fastgit();
+        let settings = Settings {
+            acceleration_enabled: true,
+            route_scope: RouteScope::Allowlist,
+            current_node_id: Some(node.id.clone()),
+            ..Settings::default()
+        };
+        for (repositories, unlisted_owner) in [
+            (vec!["gitboost-validation/not-in-allowlist"], 0),
+            (vec!["gitboost-validation/not"], 0),
+            (
+                vec![
+                    "gitboost-validation-0/not",
+                    "gitboost-validation-1/not-in-allowlist",
+                    "gitboost-validation-2/not-in-allowlist",
+                ],
+                3,
+            ),
+        ] {
+            let routes = repositories
+                .into_iter()
+                .map(|repository| RouteEntry {
+                    id: repository.into(),
+                    repository_url: format!("https://github.com/{repository}.git"),
+                    created_at: Utc::now(),
+                })
+                .collect::<Vec<_>>();
+            let content = git::build_config(&settings, Some(&node), &routes, None).unwrap();
+            atomic_write(&config_path, content.as_bytes()).unwrap();
+            validate_configuration(
+                &config_path,
+                &settings,
+                Some(&node),
+                &routes,
+                ValidationEnvironment::ManagedConfigOnly,
+            )
+            .unwrap();
+
+            let unlisted = format!(
+                "https://github.com/gitboost-validation-{unlisted_owner}/not-in-allowlist.git"
+            );
+            assert_eq!(
+                git::effective_urls_isolated(&config_path, &unlisted).unwrap(),
+                (unlisted.clone(), unlisted.clone())
+            );
+
+            // A rewrite of the chosen unlisted URL must still fail validation.
+            let invalid = format!(
+                "{content}\n[url \"https://unexpected.example/\"]\n\tinsteadOf = {unlisted}\n"
+            );
+            atomic_write(&config_path, invalid.as_bytes()).unwrap();
+            let error = validate_configuration(
+                &config_path,
+                &settings,
+                Some(&node),
+                &routes,
+                ValidationEnvironment::ManagedConfigOnly,
+            )
+            .unwrap_err();
+            assert_eq!(error, format!("配置未正确处理 fetch：{unlisted}"));
+        }
     }
 
     #[test]
