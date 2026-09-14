@@ -1,0 +1,26 @@
+src-tauri/src/core.rs
+  s_f9385ffc3b1605::t_611ce3f12ac742 28
+scripts/refresh-cdn-cache.test.mjs
+  s_f9385ffc3b1605::t_c8dac196326299 10,13,28-29,47-100
+  s_f9385ffc3b1605::t_611ce3f12ac742 24
+  s_f9385ffc3b1605::t_f3b214f2f501d6 101
+scripts/refresh-cdn-cache.mjs
+  s_f9385ffc3b1605::t_611ce3f12ac742 21
+  s_f9385ffc3b1605::t_c8dac196326299 63-71,77
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "1951fb58c77116306a2dedbce7d81923ad5e5e44",
+  "prompts": {},
+  "sessions": {
+    "s_f9385ffc3b1605": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a05b75-56bb-7f32-a5db-78df43af47e5",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
