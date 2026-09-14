@@ -1,0 +1,14 @@
+nodes.enc.json
+  h_94c24d9d37904f 3-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "90cf84606bc6313b2d5c5b53d467c056098477c8",
+  "prompts": {},
+  "humans": {
+    "h_94c24d9d37904f": {
+      "author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
