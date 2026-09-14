@@ -1,0 +1,25 @@
+.cnb.yml
+  s_7056b7f2abd747::t_d95d0b4bf49d10 1-15
+scripts/prepare-cnb-release-assets.mjs
+  s_7056b7f2abd747::t_bbc3f2d5ade6cb 41,43-46,56,60,78
+  s_7056b7f2abd747::t_d95d0b4bf49d10 1-40,42,47-55,57-59,61-77,79-107
+scripts/prepare-cnb-release-assets.test.mjs
+  s_7056b7f2abd747::t_d95d0b4bf49d10 1-30,32-73,75-88,90-94
+  s_7056b7f2abd747::t_bbc3f2d5ade6cb 31,74,89
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "85ed373839cff2335083fef91a2be25a4acb2501",
+  "prompts": {},
+  "sessions": {
+    "s_7056b7f2abd747": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a021f1-0a51-7532-90d9-ca1d041e537c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
