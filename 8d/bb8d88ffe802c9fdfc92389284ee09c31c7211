@@ -1,0 +1,61 @@
+GitHub加速应用产品方案.md
+  s_c53949fa8b2e91::t_cc9f5ad446ddec 78
+  s_c53949fa8b2e91::t_dc15bc5a905752 124-127
+  s_c53949fa8b2e91::t_c259e53f0fd403 77,193,310
+src-tauri/src/core.rs
+  s_c53949fa8b2e91::t_f2be1fa2a5dffc 919-923,952,1000,1152-1153,1156-1157,1160
+  s_c53949fa8b2e91::t_34bb469a8d1faf 1822,2772-2774,2776-2777,2779-2787,2789-2809,2811-2816,2818-2820,2822-2827,2829-2832,2834
+  s_856731820fad3d::t_940d35f56c7bc6 2221,2765,2771,2775,2778,2788,2810,2817,2821,2828,2835
+  s_c53949fa8b2e91::t_715393dea9743c 2889-2890
+  s_856731820fad3d::t_35a49d2370f17d 611
+  s_c53949fa8b2e91::t_cc9f5ad446ddec 2836-2848
+  s_856731820fad3d::t_2492dd20a0d460 596,638-639,824,827,830,938-939,1024,1032,1061,1082-1083,1154-1155
+  s_c53949fa8b2e91::t_c259e53f0fd403 2011,2978
+  s_856731820fad3d::t_7fbfbb06fd36d2 640
+  s_c53949fa8b2e91::t_b4191be8fe56a0 2833
+src/utils.ts
+  s_856731820fad3d::t_3c4680e2868aef 1
+src/App.tsx
+  s_c53949fa8b2e91::t_f2be1fa2a5dffc 91,93,225
+  s_856731820fad3d::t_e6c329fbf92c78 7,196
+  s_856731820fad3d::t_3c4680e2868aef 6,221,234
+  s_856731820fad3d::t_5b036eabb4c107 89,218,249
+  s_c53949fa8b2e91::t_ddf861fbbefbe7 308
+README.md
+  s_c53949fa8b2e91::t_c259e53f0fd403 13
+src/utils.test.ts
+  s_856731820fad3d::t_e6c329fbf92c78 2
+tests/app.spec.ts
+  s_c53949fa8b2e91::t_1456b8e7786f85 276-279
+  s_c53949fa8b2e91::t_d69fdc57bc74f3 9-10
+  s_856731820fad3d::t_adb7af0a763a93 67,96,145,218,287,291-292,364,401
+  s_c53949fa8b2e91::t_db1e2d52b37637 280
+src-tauri/src/git.rs
+  s_856731820fad3d::t_85ce0156151ff6 2,219,229
+src/api.ts
+  s_856731820fad3d::t_3c4680e2868aef 2
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "8dbb8d88ffe802c9fdfc92389284ee09c31c7211",
+  "prompts": {},
+  "sessions": {
+    "s_856731820fad3d": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0086c-f2d0-7b93-a3f3-e2b5e75c005b",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    },
+    "s_c53949fa8b2e91": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00844-9ea1-74c3-ab35-40358aed959d",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
