@@ -1,0 +1,102 @@
+tests/app.spec.ts
+  s_e261b55d4012a2::t_a3425ecf6ec551 302-303,313-331
+  s_e261b55d4012a2::t_470e1c7d1d0ea1 221
+  s_e261b55d4012a2::t_4b854d803b7722 332-334
+  s_8ce1235405c21c::t_01c64fb513b59d 71,102,133,151,224,243-246,268-271,281-282,335-337,405,442
+src-tauri/src/lib.rs
+  s_e261b55d4012a2::t_532103ea8adf03 623-640
+  s_e261b55d4012a2::t_d2b190b93b6c56 357,573,606-607
+  s_e261b55d4012a2::t_187f61d820e215 613-622,641
+  s_e261b55d4012a2::t_0f5a12c35ac5c3 24-54,66,72,126,130-131,158,163,168,173,246-250,275,280,289,299,304,319,324,329,339,351
+  s_e261b55d4012a2::t_4c2b64cce7a4ae 55-65,352
+  s_a57886207d5f7b::t_946c243ab12a1e 642
+src-tauri/src/downloads.rs
+  s_e261b55d4012a2::t_de58cec8e22bab 37-47
+src/utils.ts
+  s_e261b55d4012a2::t_17fc01da8e0c08 43-54
+  s_e261b55d4012a2::t_ca6ba700a5b42b 41-42
+  s_e261b55d4012a2::t_4651b2ce805173 55
+src/utils.test.ts
+  s_e261b55d4012a2::t_9069341ade4208 19-40
+  s_e261b55d4012a2::t_cd896ca68e90dd 18
+  s_e261b55d4012a2::t_8bfd0be3982e29 41
+  s_e261b55d4012a2::t_3c16877a384d44 2
+src/App.tsx
+  s_e261b55d4012a2::t_3b96a1f2713d15 448
+  s_a57886207d5f7b::t_7c067cb499b13e 9,133,139,141,145,152,166,169,205-213,228-239,266,271-279
+src-tauri/src/core.rs
+  s_e261b55d4012a2::t_d2b190b93b6c56 3516
+  s_e261b55d4012a2::t_0a72088b0daf99 2869-2872,2880-2881,2883,3507-3515
+  s_e0f0f4fb65072c::t_2efc898ee0b3c7 918,1158-1163,1177,2862
+  s_e0f0f4fb65072c::t_ca1671396fe6d6 2018,2114
+  s_e0f0f4fb65072c::t_9d0cc8fbc68a1f 916-917
+  s_e0f0f4fb65072c::t_d265de4db97f05 2859-2861
+  s_e261b55d4012a2::t_c55dc4d759ff68 2873-2875,2877-2879
+  s_e261b55d4012a2::t_7e8c870d70f846 2882
+  s_e261b55d4012a2::t_ec5f7958419daa 2884-2885
+  s_b6ef5efaa6fa53::t_f9a3737d7a377d 936-943,2805,2854-2858,2863-2868,2876
+src-tauri/src/models.rs
+  s_a57886207d5f7b::t_48ce33f123e8ad 22-24,43
+src/api.ts
+  s_a57886207d5f7b::t_3904b5cb6e1c8a 15,84
+src/styles.css
+  s_b4d9adcdaafe11::t_21b79e6fc6e182 198-202
+src/types.ts
+  s_a57886207d5f7b::t_b13c552b4daa4f 15
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e8c141d4085898c38a83cfa68418e6a94ad9adaf",
+  "prompts": {},
+  "sessions": {
+    "s_8ce1235405c21c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0527e-4861-7f11-b60f-0263900236f1",
+        "model": "unknown"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    },
+    "s_a57886207d5f7b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04dbf-e70d-72a2-8ab0-d6c04527b533",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    },
+    "s_b4d9adcdaafe11": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a019d3-a5a8-7022-bb6d-589d2dac35a8",
+        "model": "unknown"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    },
+    "s_b6ef5efaa6fa53": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06f1f-114e-7732-93dc-92015cede92b",
+        "model": "unknown"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    },
+    "s_e0f0f4fb65072c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0136f-48dc-7582-b2d7-48dcb2fe15e8",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    },
+    "s_e261b55d4012a2": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a012ac-55a2-70e1-8e15-a02b22db45b9",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
