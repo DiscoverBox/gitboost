@@ -1,0 +1,21 @@
+src-tauri/src/lib.rs
+  s_eda44712f68f97::t_7d70284cc193e1 610-612
+src-tauri/Cargo.toml
+  s_eda44712f68f97::t_7d70284cc193e1 40-41
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "a6ba937f5cf10e7bb3836974cd0dea450093b67c",
+  "prompts": {},
+  "sessions": {
+    "s_eda44712f68f97": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00b0e-91c2-76b2-9697-79d641872887",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
