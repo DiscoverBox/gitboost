@@ -1,0 +1,19 @@
+nodes.enc.json
+  s_e520f8a5de032f::t_99d47b8e33d804 3-4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f37f40304b0cff3d51fde6cb4162bc09958d2e4f",
+  "prompts": {},
+  "sessions": {
+    "s_e520f8a5de032f": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d356bac4-c8f9-41ec-9f32-d671f5f669ca",
+        "model": "qwen3.8-max"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
