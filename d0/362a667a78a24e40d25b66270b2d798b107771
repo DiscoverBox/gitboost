@@ -1,0 +1,19 @@
+tests/app.spec.ts
+  s_8ce1235405c21c::t_18cfe705d3022a 168,171,177,194
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "d0362a667a78a24e40d25b66270b2d798b107771",
+  "prompts": {},
+  "sessions": {
+    "s_8ce1235405c21c": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0527e-4861-7f11-b60f-0263900236f1",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
