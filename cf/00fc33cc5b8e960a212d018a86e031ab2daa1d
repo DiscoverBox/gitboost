@@ -1,0 +1,25 @@
+README.md
+  s_8c5e9f94dd74fe::t_3669e4046c830b 5,7,13-15,22,28,30-32,38-40,42-59,63-65,67-72,76-78,80-87,89-90,93-94,97-112,118,125,141,149
+  s_8c5e9f94dd74fe::t_1035c70901c379 3,9,11,17,19,25,27,29,35,41,62,73-75,88,127,133,139,143,145-147
+  s_8c5e9f94dd74fe::t_17e9e562ec07bc 79
+  s_8c5e9f94dd74fe::t_c6efb7e8fcf234 37,66
+  s_8c5e9f94dd74fe::t_67d43f973e383e 151
+LICENSE
+  s_8c5e9f94dd74fe::t_67d43f973e383e 1-674
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "cf00fc33cc5b8e960a212d018a86e031ab2daa1d",
+  "prompts": {},
+  "sessions": {
+    "s_8c5e9f94dd74fe": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a019de-f814-7632-b9b8-d4ff2355ffed",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
