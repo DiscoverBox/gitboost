@@ -1,0 +1,29 @@
+src-tauri/src/lib.rs
+  s_58506a1cfcc598::t_d3c1d8b34a9f5a 18,316-319,341-352,541,581-582,584-591
+  s_58506a1cfcc598::t_8b9d230f2c8418 538,583
+  s_a57886207d5f7b::t_34330953add035 592-593
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "c5f80013a7405b9cd4d4689bb55f06b52cb81630",
+  "prompts": {},
+  "sessions": {
+    "s_58506a1cfcc598": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0090b-a888-7192-91ad-b12e4d8bc3fc",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    },
+    "s_a57886207d5f7b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04dbf-e70d-72a2-8ab0-d6c04527b533",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
