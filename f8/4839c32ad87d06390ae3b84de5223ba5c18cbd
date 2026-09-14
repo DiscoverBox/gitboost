@@ -1,0 +1,32 @@
+docs/USER_GUIDE.md
+  s_ba173ae556f32e::t_1617669fe044a4 53
+README.md
+  s_ba173ae556f32e::t_1617669fe044a4 33-34
+src-tauri/src/git.rs
+  s_ba173ae556f32e::t_4412450a91f847 701-702,719-723,733-736,750
+  s_ba173ae556f32e::t_b5ee1d348349ae 849-878,880,882-893,908-924
+  s_ba173ae556f32e::t_360978421f7085 879
+  s_ba173ae556f32e::t_1920d0d585e9e8 881
+  s_ba173ae556f32e::t_1e76b52278520a 23-28,79,83,493,500,503,506,511,520,522,527,538,540,545,555,557,559,570,572,689,692,696,698-700,703-707,711-712,716-718,724-726,728-732,737-742,746-747,749,752
+  s_ba173ae556f32e::t_34c7813b607cd7 751
+  s_ba173ae556f32e::t_d03ec3e4ab7521 925
+src-tauri/src/core.rs
+  s_ba173ae556f32e::t_bb37c0afdc3a24 3685-3696,3698-3703,3727-3740
+  s_ba173ae556f32e::t_9151c1dba7bf11 3697
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "f84839c32ad87d06390ae3b84de5223ba5c18cbd",
+  "prompts": {},
+  "sessions": {
+    "s_ba173ae556f32e": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a03682-07b5-73d3-bdc1-70969673b40c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
