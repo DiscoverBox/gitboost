@@ -1,0 +1,20 @@
+src-tauri/src/core.rs
+  s_b6ef5efaa6fa53::t_d3e2852c7d4657 1532-1545,2078-2142
+  s_b6ef5efaa6fa53::t_38ec7fbd94b0c9 2143-2144
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "25f26faef9334103375f23dbb7a056ec0a80d3ac",
+  "prompts": {},
+  "sessions": {
+    "s_b6ef5efaa6fa53": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a06f1f-114e-7732-93dc-92015cede92b",
+        "model": "gpt-6-astra"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
