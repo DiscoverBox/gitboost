@@ -1,0 +1,57 @@
+tests/app.spec.ts
+  s_07b20a19911648::t_709ee07a478960 326-338,352-359
+  s_07b20a19911648::t_444aa1743a2ebe 343,348
+  s_07b20a19911648::t_aafec4d1eab9cf 339-342,344-347,349-351
+src-tauri/src/git.rs
+  s_bf7be81b6ec2aa::t_596063413a5ef8 742-749
+src/App.tsx
+  s_07b20a19911648::t_aafec4d1eab9cf 43,45-46,186-188,193
+  s_07b20a19911648::t_310e1217ea48eb 47
+  s_07b20a19911648::t_709ee07a478960 35-42,44,48-54,140-142
+src-tauri/src/downloads.rs
+  s_07b20a19911648::t_709ee07a478960 39-44,50,52
+src-tauri/src/lib.rs
+  s_07b20a19911648::t_2af672a7847492 580-587
+  s_07b20a19911648::t_709ee07a478960 26-33,315-319,527,535,578-579,588-589
+  s_a57886207d5f7b::t_f42f00764fcb6a 590
+src/styles.css
+  s_07b20a19911648::t_444aa1743a2ebe 52
+  s_07b20a19911648::t_1c38c01569fb33 40
+  s_07b20a19911648::t_709ee07a478960 54-55,57,59-61
+  s_07b20a19911648::t_9f0a1f4589bd3a 53,56
+  s_07b20a19911648::t_aafec4d1eab9cf 37-39,51,58
+src/api.ts
+  s_07b20a19911648::t_709ee07a478960 57-61,100-103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "4662c6a089154e70fd29bc03f48ee4362474eccb",
+  "prompts": {},
+  "sessions": {
+    "s_07b20a19911648": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0056a-3986-7b40-9334-e9eb10fb41c1",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    },
+    "s_a57886207d5f7b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a04dbf-e70d-72a2-8ab0-d6c04527b533",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    },
+    "s_bf7be81b6ec2aa": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a00591-1a13-75b1-8b95-4d99176a2c07",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
