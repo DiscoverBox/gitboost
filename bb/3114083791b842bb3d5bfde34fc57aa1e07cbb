@@ -1,0 +1,23 @@
+.github/workflows/release.yml
+  s_b4d9adcdaafe11::t_df4e6057af8f0c 68-75
+README.md
+  s_b4d9adcdaafe11::t_df4e6057af8f0c 77-84
+CODE_SIGNING_POLICY.md
+  s_b4d9adcdaafe11::t_df4e6057af8f0c 1-52
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "bb3114083791b842bb3d5bfde34fc57aa1e07cbb",
+  "prompts": {},
+  "sessions": {
+    "s_b4d9adcdaafe11": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a019d3-a5a8-7022-bb6d-589d2dac35a8",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
