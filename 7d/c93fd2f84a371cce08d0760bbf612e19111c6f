@@ -1,0 +1,16 @@
+package-lock.json
+  h_94c24d9d37904f 3,9
+package.json
+  h_94c24d9d37904f 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "7dc93fd2f84a371cce08d0760bbf612e19111c6f",
+  "prompts": {},
+  "humans": {
+    "h_94c24d9d37904f": {
+      "author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
