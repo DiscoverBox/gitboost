@@ -1,0 +1,19 @@
+.cnb/web_trigger.yml
+  s_7056b7f2abd747::t_4dbb2cf3231dfb 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "2e8b4721dba38fde6e46fcf8100a9ca22c655c2a",
+  "prompts": {},
+  "sessions": {
+    "s_7056b7f2abd747": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a021f1-0a51-7532-90d9-ca1d041e537c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
