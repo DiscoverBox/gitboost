@@ -1,0 +1,23 @@
+tests/app.spec.ts
+  s_d6f39a6727b620::t_9b7faf029a08a6 441-445,452,466-473,479-480
+src/App.tsx
+  s_d6f39a6727b620::t_9b7faf029a08a6 19,376,380-383,392,394,398
+src/styles.css
+  s_d6f39a6727b620::t_9b7faf029a08a6 129-130
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "0c14b33b52e4c728c9459da6905a49c00d6ecbbc",
+  "prompts": {},
+  "sessions": {
+    "s_d6f39a6727b620": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a0148a-a94b-7593-8f25-63cf4ab048a3",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
