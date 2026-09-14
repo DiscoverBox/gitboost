@@ -1,0 +1,43 @@
+tests/app.spec.ts
+  s_64c34c9fefb85f::t_49da5541c5ee69 21,78,86
+  s_64c34c9fefb85f::t_c451d5917aa905 2,5
+  s_64c34c9fefb85f::t_fc21b4adee809a 6
+package.json
+  s_64c34c9fefb85f::t_39474b7958634d 4,15-16
+.github/workflows/release.yml
+  s_64c34c9fefb85f::t_a7458ebaeda8e4 34-38,50-51
+  s_64c34c9fefb85f::t_d4b6e64781d63e 52
+src/App.tsx
+  s_64c34c9fefb85f::t_a7458ebaeda8e4 2,6,497,499-503,520
+scripts/release.mjs
+  s_64c34c9fefb85f::t_39474b7958634d 1-70,72-74,80-111
+  s_64c34c9fefb85f::t_c451d5917aa905 71,75-79
+scripts/release.test.mjs
+  s_64c34c9fefb85f::t_49da5541c5ee69 1-71
+scripts/version.mjs
+  s_64c34c9fefb85f::t_39474b7958634d 1-9,14-107
+  s_64c34c9fefb85f::t_5e5df13564c30e 10-13
+README.md
+  s_64c34c9fefb85f::t_6cbe2f49988c8b 69-84
+scripts/version.test.mjs
+  s_64c34c9fefb85f::t_49da5541c5ee69 1-18,21-60
+  s_64c34c9fefb85f::t_5e5df13564c30e 19-20
+src-tauri/tauri.conf.json
+  s_64c34c9fefb85f::t_39474b7958634d 4
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "68c7da7574c3a4d478cfbf3498a45f087fbb07b3",
+  "prompts": {},
+  "sessions": {
+    "s_64c34c9fefb85f": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a009bd-7a7e-7c63-904a-ed5757f05538",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
