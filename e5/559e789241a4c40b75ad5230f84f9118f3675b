@@ -1,0 +1,21 @@
+.github/workflows/sync-cnb-release.yml
+  s_7056b7f2abd747::t_8e41020e7b9201 1-38
+.cnb.yml
+  s_7056b7f2abd747::t_8e41020e7b9201 1-22
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.4",
+  "base_commit_sha": "e5559e789241a4c40b75ad5230f84f9118f3675b",
+  "prompts": {},
+  "sessions": {
+    "s_7056b7f2abd747": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "01a021f1-0a51-7532-90d9-ca1d041e537c",
+        "model": "gpt-5.6-sol"
+      },
+      "human_author": "DiscoverBox <pczhuling@gmail.com>"
+    }
+  }
+}
