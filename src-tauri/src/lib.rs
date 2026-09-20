@@ -10,6 +10,7 @@ mod usage;
 
 use crate::{core::AppCore, models::*};
 use std::{
+    ffi::OsString,
     path::{Path, PathBuf},
     sync::atomic::{AtomicBool, AtomicU64, Ordering},
     time::{Duration, Instant},
@@ -21,6 +22,7 @@ use tauri::{
 };
 #[cfg(target_os = "macos")]
 use tauri_plugin_autostart::MacosLauncher;
+use tauri_plugin_autostart::ManagerExt;
 
 #[derive(Debug, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -385,6 +387,8 @@ fn reveal_main<R: Runtime>(app: &tauri::AppHandle<R>) -> bool {
     let Some(window) = app.get_webview_window("main") else {
         return false;
     };
+    #[cfg(target_os = "macos")]
+    let _ = app.set_activation_policy(tauri::ActivationPolicy::Regular);
     let _ = window.show();
     let _ = window.unminimize();
     let _ = window.set_focus();
@@ -552,15 +556,20 @@ fn health_check_due(minutes: u32, elapsed: Duration, needs_initial_discovery: bo
         && (needs_initial_discovery || elapsed >= Duration::from_secs(u64::from(minutes) * 60))
 }
 
+fn is_background_launch(args: impl IntoIterator<Item = OsString>) -> bool {
+    args.into_iter().any(|arg| arg == "--background")
+}
+
 pub fn run() {
-    let autostart = tauri_plugin_autostart::Builder::new();
+    let background_launch = is_background_launch(std::env::args_os());
+    let autostart = tauri_plugin_autostart::Builder::new().arg("--background");
     #[cfg(target_os = "macos")]
     let autostart = autostart.macos_launcher(MacosLauncher::LaunchAgent);
 
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(autostart.build())
-        .setup(|app| {
+        .setup(move |app| {
             let data_dir: PathBuf = app
                 .path()
                 .app_data_dir()
@@ -579,12 +588,23 @@ pub fn run() {
             if app.state::<AppCore>().snapshot()?.settings.mcp_enabled {
                 mcp::start_enabled_server(app.handle().clone());
             }
+            // Existing login items need the new background argument as well.
+            if app.autolaunch().is_enabled().unwrap_or(false) {
+                let _ = app.autolaunch().enable();
+            }
+            if !background_launch {
+                reveal_main(app.handle());
+            }
             Ok(())
         })
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                #[cfg(target_os = "macos")]
+                let _ = window
+                    .app_handle()
+                    .set_activation_policy(tauri::ActivationPolicy::Accessory);
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -618,6 +638,14 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("error while building GitBoost");
 
+    // macOS applies the initial policy before the event loop starts, earlier than setup.
+    #[cfg(target_os = "macos")]
+    let mut app = app;
+    #[cfg(target_os = "macos")]
+    if background_launch {
+        app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+    }
+
     app.run(|app, event| {
         #[cfg(target_os = "macos")]
         if let tauri::RunEvent::Reopen { .. } = event {
@@ -632,12 +660,22 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::{
-        health_check_due, project_link, reveal_main, run_node_test, should_reveal_main,
-        tray_labels, CommandError,
+        health_check_due, is_background_launch, project_link, reveal_main, run_node_test,
+        should_reveal_main, tray_labels, CommandError,
     };
     use crate::models::{HealthSummary, NodeDefinition, NodeEntry, Settings};
+    use std::ffi::OsString;
     use std::time::Duration;
     use tauri::tray::{MouseButton, MouseButtonState};
+
+    #[test]
+    fn background_launch_requires_explicit_argument() {
+        assert!(is_background_launch([
+            OsString::from("GitBoost"),
+            OsString::from("--background")
+        ]));
+        assert!(!is_background_launch([OsString::from("GitBoost")]));
+    }
 
     #[test]
     fn command_errors_serialize_with_a_stable_frontend_contract() {
