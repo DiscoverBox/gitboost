@@ -71,9 +71,7 @@ jobs:
 
             ## Code signing policy
 
-            GitBoost is applying for the SignPath Foundation open-source code-signing program. Treat an artifact as signed only when its Authenticode signature verifies successfully.
-
-            Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+            macOS installers are not signed with an Apple Developer ID certificate or notarized. Windows downloads must be treated as unsigned unless their Authenticode signature verifies successfully. Download GitBoost only from this project's GitHub Releases page.
 
             See the [Code signing policy](https://github.com/DiscoverBox/gitboost/blob/main/CODE_SIGNING_POLICY.md).
           releaseDraft: true
