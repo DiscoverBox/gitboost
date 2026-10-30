@@ -160,11 +160,13 @@ npm ci
 npm run build:windows
 ```
 
-### BLA 构建
+### Release 二进制检查
 
-GitHub Actions 的 **BLA builds** workflow 会在 `main` 上相关代码变更时自动运行，也可在 Actions 页面通过 **Run workflow** 手动触发。它固定 BLA 源码提交，在链接阶段将数据写入 macOS ARM64 的 `__TEXT,__bla` section 和 Windows x64 的只读 `.bla` section，并验证数据完整性及项目的解析与目录解密测试。macOS 额外验证严格代码签名；Windows 额外解包 NSIS/MSI，确认安装包包含已验证的二进制。
+macOS 和 Windows 的 release profile 均设置 `strip = "symbols"`。自动构建会检查实际二进制：macOS 仅保留必要的 Mach-O header 符号，Windows 不得携带 COFF 符号表、debug directory 或 PDB 引用。运行必需的动态导入仍会保留。去符号只能减少元数据暴露，不会混淆业务代码、隐藏内嵌密钥或阻止反编译。
 
-成功后可在该次运行的 **Artifacts → GitBoost-bla-macos-arm64 / GitBoost-bla-windows-x64** 下载安装包和 `report.json`，保留 7 天。版本 tag 触发的正式发布也使用同一构建与验证脚本，生成 Draft Release。macOS 使用 ad hoc 签名，不含 Apple Developer ID 签名或公证；Windows 未配置 Authenticode 签名。这些检查验证构建兼容性，不证明对 REA/Ghidra 的防护效果，也不覆盖完整 GUI 与代理功能。
+GitHub Actions 的 **Native builds** workflow 在 `main` 上相关代码变更时运行，也支持手动触发。通过测试、安装包构建及二进制检查后，可从 **Artifacts → GitBoost-macos-arm64 / GitBoost-windows-x64** 下载安装包和 `native-report.json`，保留 7 天。macOS 额外检查 app 严格签名与 DMG 完整性。正式发布仍生成 Draft Release，检查通过后再发布。
+
+BLA 注入脚本 `scripts/bla-native.mjs` 仅保留为手动实验工具，不再参与自动构建或正式发布。发布产物检查会拒绝包含 BLA section 的文件。macOS 使用 ad hoc 签名，不含 Apple Developer ID 签名或公证；Windows 未配置 Authenticode 签名。上述检查不覆盖完整 GUI 与代理功能。
 
 ### 版本管理与发布
 

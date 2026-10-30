@@ -16,26 +16,21 @@ jobs:
         include:
           - platform: macos-latest
             target: aarch64-apple-darwin
+            tauri_script: node scripts/tauri-with-macos-helper.mjs
+            binary: bundle/macos/GitBoost.app/Contents/MacOS/GitBoost
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
+            tauri_script: npm run tauri
+            binary: GitBoost.exe
 
     runs-on: ${{ matrix.platform }}
     env:
-      BLA_WORK_DIR: ${{ github.workspace }}/.bla-experiment
       APPLE_SIGNING_IDENTITY: "-"
       TAURI_ENV_PLATFORM: ${{ matrix.platform == 'windows-latest' && 'windows' || 'macos' }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Checkout pinned BLA source
-        uses: actions/checkout@v4
-        with:
-          repository: qybaihe/bla
-          ref: b2d643600774d62e562081129e55b13b0d9e8a80
-          path: .bla-tool
-          persist-credentials: false
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -56,13 +51,6 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Build BLA from its lockfile
-        working-directory: .bla-tool
-        run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          node scripts/sync-version.mjs
-          node node_modules/typescript/bin/tsc -p tsconfig.build.json
-
       - name: Run frontend tests
         run: npm test
 
@@ -72,15 +60,12 @@ jobs:
       - name: Run Rust tests
         run: cargo test --manifest-path src-tauri/Cargo.toml
 
-      - name: Build frontend
-        run: npm run build
-
       - name: Build and upload release
         uses: tauri-apps/tauri-action@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tauriScript: node scripts/bla-native.mjs
+          tauriScript: ${{ matrix.tauri_script }}
           tagName: ${{ github.ref_name }}
           releaseName: GitBoost ${{ github.ref_name }}
           releaseBody: |
@@ -88,7 +73,7 @@ jobs:
 
             - macOS: Apple Silicon DMG
             - Windows: NSIS EXE / MSI
-            - BLA data is linked into native sections on both platforms and checked before upload. Resistance to reverse engineering has not been independently verified.
+            - Release symbols are stripped. This reduces exposed metadata and is not code obfuscation or virtualization.
 
             ## Code signing policy
 
@@ -99,10 +84,12 @@ jobs:
           prerelease: false
           args: --target ${{ matrix.target }}
 
-      - name: Upload BLA verification report
+      - name: Verify release executable
+        run: node scripts/verify-release-binary.mjs "src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary }}" > native-report.json
+
+      - name: Upload binary verification report
         uses: actions/upload-artifact@v4
         with:
-          name: BLA-report-${{ matrix.target }}
-          path: .bla-experiment/report.json
-          include-hidden-files: true
+          name: Native-report-${{ matrix.target }}
+          path: native-report.json
           if-no-files-found: error

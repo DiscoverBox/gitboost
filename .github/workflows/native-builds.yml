@@ -1,12 +1,13 @@
-name: BLA builds
+name: Native builds
 
 on:
   workflow_dispatch:
   push:
     branches: [main]
     paths:
-      - ".github/workflows/bla-macos.yml"
-      - "scripts/bla-native*"
+      - ".github/workflows/native-builds.yml"
+      - ".github/workflows/release.yml"
+      - "scripts/verify-release-binary*"
       - "scripts/tauri-with-macos-helper.mjs"
       - "scripts/open-gitboost.command"
       - "src/**"
@@ -27,26 +28,21 @@ jobs:
           - platform: macos-15
             target: aarch64-apple-darwin
             artifact: macos-arm64
+            build: build:macos
+            binary: bundle/macos/GitBoost.app/Contents/MacOS/GitBoost
           - platform: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: windows-x64
+            build: build:windows
+            binary: GitBoost.exe
     runs-on: ${{ matrix.platform }}
     timeout-minutes: 45
     env:
-      BLA_WORK_DIR: ${{ github.workspace }}/.bla-experiment
       APPLE_SIGNING_IDENTITY: "-"
       TAURI_ENV_PLATFORM: ${{ matrix.platform == 'windows-latest' && 'windows' || 'macos' }}
     steps:
       - uses: actions/checkout@v4
         with:
-          persist-credentials: false
-
-      - name: Checkout pinned BLA source
-        uses: actions/checkout@v4
-        with:
-          repository: qybaihe/bla
-          ref: b2d643600774d62e562081129e55b13b0d9e8a80
-          path: .bla-tool
           persist-credentials: false
 
       - uses: actions/setup-node@v4
@@ -61,33 +57,35 @@ jobs:
       - name: Install project dependencies
         run: npm ci
 
-      - name: Build BLA from its lockfile
-        working-directory: .bla-tool
-        run: |
-          npm ci --ignore-scripts --no-audit --no-fund
-          node scripts/sync-version.mjs
-          node node_modules/typescript/bin/tsc -p tsconfig.build.json
-
-      - name: Test scripts and build frontend
+      - name: Test scripts and frontend
         run: |
           npm run test:scripts
           npm test
-          npm run build
 
-      - name: Build and verify BLA installers
-        run: node scripts/bla-native.mjs build --target ${{ matrix.target }}
+      - name: Run Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
 
-      - name: Upload verified experimental build
+      - name: Build installers
+        run: npm run ${{ matrix.build }} -- --ci
+
+      - name: Verify release executable
+        run: node scripts/verify-release-binary.mjs "src-tauri/target/${{ matrix.target }}/release/${{ matrix.binary }}" > native-report.json
+
+      - name: Verify macOS app and DMG
+        if: runner.os == 'macOS'
+        run: |
+          codesign --verify --deep --strict "src-tauri/target/${{ matrix.target }}/release/bundle/macos/GitBoost.app"
+          hdiutil verify src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+
+      - name: Upload verified build
         uses: actions/upload-artifact@v4
         with:
-          name: GitBoost-bla-${{ matrix.artifact }}
+          name: GitBoost-${{ matrix.artifact }}
           if-no-files-found: error
           include-hidden-files: true
           retention-days: 7
           path: |
-            .bla-experiment/GitBoost-bla-arm64.app.zip
-            .bla-experiment/GitBoost-bla-x64.exe
-            .bla-experiment/*.dmg
-            .bla-experiment/*-setup.exe
-            .bla-experiment/*.msi
-            .bla-experiment/report.json
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*-setup.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/msi/*.msi
+            native-report.json
