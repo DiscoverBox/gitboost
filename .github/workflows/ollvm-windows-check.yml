@@ -1,0 +1,57 @@
+name: LLVM Windows experiment check
+
+on:
+  workflow_dispatch:
+    inputs:
+      draft_tag:
+        description: Temporary draft containing the locally cross-compiled test archive
+        required: true
+      archive_sha256:
+        description: SHA-256 of ollvm-windows-tests.zip
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Download and verify the experimental binaries
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EXPERIMENT_TAG: ${{ inputs.draft_tag }}
+          EXPECTED_SHA256: ${{ inputs.archive_sha256 }}
+        run: |
+          if ($env:EXPERIMENT_TAG -notmatch '^ollvm-validation-[0-9a-f]{7,40}$') { throw 'Invalid experiment tag' }
+          if ($env:EXPECTED_SHA256 -notmatch '^[0-9a-f]{64}$') { throw 'Invalid archive hash' }
+          gh release download "$env:EXPERIMENT_TAG" --repo "$env:GITHUB_REPOSITORY" --pattern ollvm-windows-tests.zip --dir incoming
+          if ($LASTEXITCODE -ne 0) { throw 'Download failed' }
+          $actual = (Get-FileHash incoming/ollvm-windows-tests.zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($actual -ne $env:EXPECTED_SHA256) { throw 'Archive hash mismatch' }
+          Expand-Archive incoming/ollvm-windows-tests.zip -DestinationPath validation
+      - name: Run both real Windows test executables
+        run: |
+          foreach ($variant in @('baseline', 'obfuscated')) {
+            & "./validation/$variant/gitboost-tests.exe" --test-threads=1 2>&1 | Tee-Object "validation/$variant/tests.log"
+            if ($LASTEXITCODE -ne 0) { throw "Tests failed: $variant" }
+            node scripts/verify-release-binary.mjs "validation/$variant/GitBoost.exe" > "validation/$variant/native-report.json"
+            if ($LASTEXITCODE -ne 0) { throw "Binary verification failed: $variant" }
+            node scripts/verify-release-binary.mjs "validation/$variant/gitboost-tests.exe" > "validation/$variant/test-native-report.json"
+            if ($LASTEXITCODE -ne 0) { throw "Test binary verification failed: $variant" }
+          }
+      - name: Save experimental binaries and reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: GitBoost-ollvm-windows-experiment
+          path: validation/
+          if-no-files-found: warn
+          retention-days: 7
