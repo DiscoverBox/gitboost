@@ -6,6 +6,9 @@ on:
       draft_tag:
         description: Temporary draft containing the locally cross-compiled test archive
         required: true
+      asset_url:
+        description: Short-lived read-only release-assets.githubusercontent.com download URL
+        required: true
       archive_sha256:
         description: SHA-256 of ollvm-windows-tests.zip
         required: true
@@ -26,14 +29,16 @@ jobs:
           node-version: 22
       - name: Download and verify the experimental binaries
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EXPERIMENT_TAG: ${{ inputs.draft_tag }}
+          EXPERIMENT_ASSET_URL: ${{ inputs.asset_url }}
           EXPECTED_SHA256: ${{ inputs.archive_sha256 }}
         run: |
           if ($env:EXPERIMENT_TAG -notmatch '^ollvm-validation-[0-9a-f]{7,40}$') { throw 'Invalid experiment tag' }
           if ($env:EXPECTED_SHA256 -notmatch '^[0-9a-f]{64}$') { throw 'Invalid archive hash' }
-          gh release download "$env:EXPERIMENT_TAG" --repo "$env:GITHUB_REPOSITORY" --pattern ollvm-windows-tests.zip --dir incoming
-          if ($LASTEXITCODE -ne 0) { throw 'Download failed' }
+          $uri = [Uri]$env:EXPERIMENT_ASSET_URL
+          if ($uri.Scheme -ne 'https' -or $uri.Host -ne 'release-assets.githubusercontent.com') { throw 'Invalid download host' }
+          New-Item -ItemType Directory incoming | Out-Null
+          Invoke-WebRequest -Uri $uri -OutFile incoming/ollvm-windows-tests.zip -MaximumRedirection 0
           $actual = (Get-FileHash incoming/ollvm-windows-tests.zip -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne $env:EXPECTED_SHA256) { throw 'Archive hash mismatch' }
           Expand-Archive incoming/ollvm-windows-tests.zip -DestinationPath validation
