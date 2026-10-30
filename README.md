@@ -166,7 +166,7 @@ macOS 和 Windows 的 release profile 均设置 `strip = "symbols"`；Windows MS
 
 GitHub Actions 的 **Native builds** workflow 在 `main` 上相关代码变更时运行，也支持手动触发。通过测试、安装包构建及二进制检查后，可从 **Artifacts → GitBoost-macos-arm64 / GitBoost-windows-x64** 下载安装包和 `native-report.json`，保留 7 天。macOS 额外检查 app 严格签名与 DMG 完整性。正式发布仍生成 Draft Release，检查通过后再发布。
 
-BLA 注入脚本 `scripts/bla-native.mjs` 仅保留为手动实验工具，不再参与自动构建或正式发布。发布产物检查会拒绝包含 BLA section 的文件。macOS 使用 ad hoc 签名，不含 Apple Developer ID 签名或公证；Windows 未配置 Authenticode 签名。上述检查不覆盖完整 GUI 与代理功能。
+BLA 注入脚本 `scripts/bla-native.mjs` 仅保留为手动实验工具，不再参与自动构建或正式发布；原因和实测范围见[三样本反编译对照](docs/protection-audit.md)。发布产物检查会拒绝包含 BLA section 的文件。macOS 使用 ad hoc 签名，不含 Apple Developer ID 签名或公证；Windows 未配置 Authenticode 签名。上述检查不覆盖完整 GUI 与代理功能。
 
 ### 版本管理与发布
 

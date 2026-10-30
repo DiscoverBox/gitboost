@@ -1,0 +1,311 @@
+{
+  "date": "2026-10-30",
+  "sourceRevision": "636823c88fe082b150b011bb8fe68372f9e27b92",
+  "sourceChanges": "Only release strip setting; no business source modifications. Later build.rs changes target MSVC only.",
+  "target": "aarch64-apple-darwin",
+  "rustc": "1.97.1 (8bab26f4f 2026-07-14)",
+  "llvm": "22.1.8",
+  "ghidra": {
+    "version": "11.4.3",
+    "archiveSha256": "b22a8baebb14339f19903c54363ba7e01781930cc43ab430539aabce0d58547a",
+    "java": "Microsoft OpenJDK 21.0.10 ARM64",
+    "maxCpu": 4,
+    "heap": "2G",
+    "analysisTimeoutPerFileSeconds": 600,
+    "decompileTimeoutSeconds": 60,
+    "analyzers": "default"
+  },
+  "bla": {
+    "blaRepository": "qybaihe/bla",
+    "blaCommit": "b2d643600774d62e562081129e55b13b0d9e8a80",
+    "blaVersion": "1.5.1",
+    "intensity": "bankrupt",
+    "platform": "darwin",
+    "payloadBytes": 1166242,
+    "payloadSha256": "9648d31b503baedbdde99818040f2b8df5ef6253f69f95efd81a1e8e18d70620"
+  },
+  "task": {
+    "anchor": "仓库地址必须是 github.com/owner/repository",
+    "method": "UTF-8 bytes -> references (up to 2 data hops) -> containing function -> decompile; never locate by function name.",
+    "blind": false,
+    "oracle": "Known project source; this is a targeted comparison, not an independent blind red-team assessment."
+  },
+  "samples": [
+    {
+      "variant": "original",
+      "bytes": 19396280,
+      "sha256": "25bc7756aeb5bb8ce5087c4020d9357814f278837288885d40292e5237415409",
+      "definedSymbols": 42590,
+      "gitboostSymbols": 14398,
+      "blaPayloadBytes": 0,
+      "anchorAddresses": [
+        "1008fe85e"
+      ],
+      "targetFunctions": [
+        {
+          "address": "1001e2c1c",
+          "name": "normalize_repository_url",
+          "blocks": 70,
+          "edges": 149,
+          "decompiled": true,
+          "error": "",
+          "decompilerChars": 14046
+        }
+      ],
+      "decompilerCsha256": "ced029f11394b4ef147fe1f0cfcd2656ecd0537fa86c0f6c21d394abe75bdb4d",
+      "globalAnalysisTimeout": false,
+      "globalAnalysisReportedSeconds": 536
+    },
+    {
+      "variant": "stripped",
+      "bytes": 12604832,
+      "sha256": "80fd1ac4e4a0b700fedf37859e4571e5178114e89635c15f368b1bfbfca6d974",
+      "definedSymbols": 1,
+      "gitboostSymbols": 0,
+      "blaPayloadBytes": 0,
+      "anchorAddresses": [
+        "1008fe84e"
+      ],
+      "targetFunctions": [
+        {
+          "address": "1001e2c1c",
+          "name": "FUN_1001e2c1c",
+          "blocks": 70,
+          "edges": 149,
+          "decompiled": true,
+          "error": "",
+          "decompilerChars": 12874
+        }
+      ],
+      "decompilerCsha256": "a2c48dadcd5e577ffd2c18d6efaa0bddecd503571356ea4b1b04fd790b4e3012",
+      "globalAnalysisTimeout": true,
+      "globalAnalysisReportedSeconds": 643
+    },
+    {
+      "variant": "stripped-bla",
+      "bytes": 13777184,
+      "sha256": "4c5a0c84e2cc162a733fdaa46e537e63e279926e33df12b20d87d14c659513f2",
+      "definedSymbols": 1,
+      "gitboostSymbols": 0,
+      "blaPayloadBytes": 1166242,
+      "anchorAddresses": [
+        "1008fe8ce"
+      ],
+      "targetFunctions": [
+        {
+          "address": "1001e2c6c",
+          "name": "FUN_1001e2c6c",
+          "blocks": 70,
+          "edges": 149,
+          "decompiled": true,
+          "error": "",
+          "decompilerChars": 12874
+        }
+      ],
+      "decompilerCsha256": "52056271059456a8905108a12fb894ee1b93e16daa0ca70c3c44436ba4f199fd",
+      "globalAnalysisTimeout": true,
+      "globalAnalysisReportedSeconds": 640
+    }
+  ],
+  "strippedVsBla": {
+    "method": "Rebase only virtual addresses through matching Mach-O (segment, section) ranges; preserve all other C text and callees.",
+    "identical": true,
+    "strippedCsha256": "a2c48dadcd5e577ffd2c18d6efaa0bddecd503571356ea4b1b04fd790b4e3012",
+    "blaRebasedCsha256": "a2c48dadcd5e577ffd2c18d6efaa0bddecd503571356ea4b1b04fd790b4e3012",
+    "unmappedAddressTokens": []
+  },
+  "catalogKeyCheck": {
+    "method": "source-assisted exact bytes; not blind key recovery",
+    "results": {
+      "original": {
+        "catalogKeyPresent": true,
+        "catalogKeyOccurrences": 1
+      },
+      "stripped": {
+        "catalogKeyPresent": true,
+        "catalogKeyOccurrences": 1
+      },
+      "stripped-bla": {
+        "catalogKeyPresent": true,
+        "catalogKeyOccurrences": 1
+      }
+    }
+  },
+  "limitations": [
+    "Global analysis timed out in both stripped variants; target decompilation completed in all three.",
+    "Shared Rust analysis emitted function overlap / VarnodeContext errors; target output also carries type-propagation warnings.",
+    "No REA/LLM blind assessment or dynamic debugging evaluation.",
+    "Reverse comparison is macOS only; Windows is validated separately for build and binary metadata.",
+    "No full GUI or live proxy smoke test in this task."
+  ],
+  "nativeBuild": {
+    "sourceRevision": "0cc79331114b1a81b23ba46e9be83bb382d5b94e",
+    "run": "https://github.com/DiscoverBox/gitboost/actions/runs/41034319241",
+    "attempt": 2,
+    "conclusion": "success",
+    "retryNote": "First Windows attempt hit the existing Git command 5-second timeout in acceleration_control_keeps_selection_in_sync; same-revision standard CI and unchanged rerun passed.",
+    "standardCI": "https://github.com/DiscoverBox/gitboost/actions/runs/41034319286",
+    "standardCIConclusion": "success",
+    "macOS": {
+      "format": "Mach-O ARM64",
+      "bytes": 12756960,
+      "definedSymbols": 1,
+      "stripped": true,
+      "bla": false,
+      "installer": "GitBoost_0.3.3_aarch64.dmg",
+      "installerSha256": "b33b20ada78b1ab46fff17e4868da8736d44ad0be809c189265a8c8debefba3a",
+      "appStrictSignatureVerifiedInCI": true,
+      "dmgIntegrityVerifiedInCI": true
+    },
+    "windows": {
+      "nativeBuildRun": "https://github.com/DiscoverBox/gitboost/actions/runs/41034319241",
+      "sourceRevision": "0cc79331114b1a81b23ba46e9be83bb382d5b94e",
+      "installers": [
+        {
+          "type": "msi",
+          "installer": "GitBoost_0.3.3_x64_en-US.msi",
+          "installerSha256": "bc4dce0456508066012c4afd8cd0ffe2848898a1dd0dfc416ef52eaceb04c1bf",
+          "executable": "Path",
+          "executableSha256": "8f162e9b60f75898659d01f6f2f1970f5a031ba4d15f8659d49f2a58fd1e0c16",
+          "format": "PE x64",
+          "bytes": 16698880,
+          "coffSymbols": 0,
+          "pdbReference": false,
+          "debugTypes": [
+            13
+          ],
+          "stripped": true,
+          "bla": false,
+          "pogoSectionGroups": [
+            ".text",
+            ".text$mn",
+            ".text$mn$00",
+            ".text$mn$21",
+            ".text$unlikely",
+            ".text$x",
+            ".idata$5",
+            ".00cfg",
+            ".CRT$XCA",
+            ".CRT$XCAA",
+            ".CRT$XCU",
+            ".CRT$XCZ",
+            ".CRT$XIA",
+            ".CRT$XIAA",
+            ".CRT$XIAC",
+            ".CRT$XIZ",
+            ".CRT$XLA",
+            ".CRT$XLZ",
+            ".CRT$XPA",
+            ".CRT$XPZ",
+            ".CRT$XTA",
+            ".CRT$XTZ",
+            ".rdata",
+            ".rdata$00",
+            ".rdata$T",
+            ".rdata$r",
+            ".rdata$voltmd",
+            ".rdata$zETW0",
+            ".rdata$zETW1",
+            ".rdata$zETW2",
+            ".rdata$zETW9",
+            ".rdata$zzzdbg",
+            ".rtc$IAA",
+            ".rtc$IZZ",
+            ".rtc$TAA",
+            ".rtc$TZZ",
+            ".tls",
+            ".tls$",
+            ".tls$ZZZ",
+            ".xdata",
+            ".xdata$x",
+            ".idata$2",
+            ".idata$3",
+            ".idata$4",
+            ".idata$6",
+            ".data",
+            ".data$r",
+            ".data$rs",
+            ".bss",
+            ".pdata",
+            ".rsrc$01",
+            ".rsrc$02"
+          ],
+          "packagedPdbFiles": 0
+        },
+        {
+          "type": "nsis",
+          "installer": "GitBoost_0.3.3_x64-setup.exe",
+          "installerSha256": "43929f882311410dce302944165bdc88d16346378ab7577db868551c7d810cca",
+          "executable": "GitBoost.exe",
+          "executableSha256": "c9db02fbf48361dfc4baff5064debd78e1db0613c3b87a717ede968fdd7c71e1",
+          "format": "PE x64",
+          "bytes": 16698880,
+          "coffSymbols": 0,
+          "pdbReference": false,
+          "debugTypes": [
+            13
+          ],
+          "stripped": true,
+          "bla": false,
+          "pogoSectionGroups": [
+            ".text",
+            ".text$mn",
+            ".text$mn$00",
+            ".text$mn$21",
+            ".text$unlikely",
+            ".text$x",
+            ".idata$5",
+            ".00cfg",
+            ".CRT$XCA",
+            ".CRT$XCAA",
+            ".CRT$XCU",
+            ".CRT$XCZ",
+            ".CRT$XIA",
+            ".CRT$XIAA",
+            ".CRT$XIAC",
+            ".CRT$XIZ",
+            ".CRT$XLA",
+            ".CRT$XLZ",
+            ".CRT$XPA",
+            ".CRT$XPZ",
+            ".CRT$XTA",
+            ".CRT$XTZ",
+            ".rdata",
+            ".rdata$00",
+            ".rdata$T",
+            ".rdata$r",
+            ".rdata$voltmd",
+            ".rdata$zETW0",
+            ".rdata$zETW1",
+            ".rdata$zETW2",
+            ".rdata$zETW9",
+            ".rdata$zzzdbg",
+            ".rtc$IAA",
+            ".rtc$IZZ",
+            ".rtc$TAA",
+            ".rtc$TZZ",
+            ".tls",
+            ".tls$",
+            ".tls$ZZZ",
+            ".xdata",
+            ".xdata$x",
+            ".idata$2",
+            ".idata$3",
+            ".idata$4",
+            ".idata$6",
+            ".data",
+            ".data$r",
+            ".data$rs",
+            ".bss",
+            ".pdata",
+            ".rsrc$01",
+            ".rsrc$02"
+          ],
+          "packagedPdbFiles": 0
+        }
+      ],
+      "sameExecutableExceptBundleTypeMarker": true,
+      "canonicalExecutableSha256": "2d4ef85a787ae21469dfb9aa83d55083bcd131fbc267a9be0fd429a6f72a6a71"
+    }
+  }
+}
