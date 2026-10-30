@@ -5,11 +5,43 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { inspectBlaSection, verifyBlaBinary } from "./bla-macos.mjs";
+import { inspectBlaSection, inspectPeBlaSection, linkerArguments, verifyBlaBinary } from "./bla-native.mjs";
 
 test("rejects missing and truncated Mach-O headers", () => {
   assert.throws(() => inspectBlaSection(Buffer.alloc(0), Buffer.alloc(0)), /Mach-O/);
   assert.throws(() => inspectBlaSection(Buffer.from("not a binary"), Buffer.alloc(0)), /Mach-O/);
+});
+
+test("rejects invalid PE files and forces the Windows payload to remain linked", () => {
+  assert.throws(() => inspectPeBlaSection(Buffer.alloc(0), Buffer.alloc(0)), /PE/);
+  assert.throws(() => inspectPeBlaSection(Buffer.alloc(64), Buffer.alloc(0)), /PE/);
+  const args = linkerArguments("win32", "payload");
+  assert.ok(args.includes("link-arg=/INCLUDE:GITBOOST_BLA_PAYLOAD"));
+  assert.ok(args.includes("link-arg=/SECTION:.bla,R"));
+});
+
+test("links a real Windows read-only PE section and executes the resulting program", {
+  skip: process.platform !== "win32" || process.arch !== "x64",
+}, (t) => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), "gitboost-bla-pe-test-"));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const payload = Buffer.from("\0[BLA-NATIVE-SHIELD-V1]\0fixture payload\0");
+  const data = Array.from(payload).join(",");
+  const source = path.join(directory, "probe.rs");
+  const binary = path.join(directory, "probe.exe");
+  writeFileSync(source, `#[used]\n#[no_mangle]\n#[link_section=".bla"]\nstatic GITBOOST_BLA_PAYLOAD: [u8; ${payload.length}] = [${data}];\nfn main() { println!("BLA fixture OK"); }\n`);
+  execFileSync("rustc", ["--edition=2021", "-O", source, "-o", binary,
+    "-C", "link-arg=/INCLUDE:GITBOOST_BLA_PAYLOAD", "-C", "link-arg=/SECTION:.bla,R"]);
+  assert.match(execFileSync(binary, { encoding: "utf8" }), /BLA fixture OK/);
+  const bytes = readFileSync(binary);
+  const result = inspectPeBlaSection(bytes, payload);
+  assert.equal(result.section.size, payload.length);
+  assert.throws(() => inspectPeBlaSection(bytes, Buffer.from("wrong")), /长度不匹配/);
+  assert.throws(() => inspectPeBlaSection(Buffer.concat([bytes, Buffer.from("tail")]), payload), /段外存在追加数据/);
+  assert.throws(() => inspectPeBlaSection(bytes.subarray(0, 64), payload), /header 无效/);
+  const tampered = Buffer.from(bytes);
+  tampered[result.section.offset] ^= 1;
+  assert.throws(() => inspectPeBlaSection(tampered, payload), /数据不匹配/);
 });
 
 test("validates a real signed ARM64 section and rejects changed payloads and EOF trailers", {

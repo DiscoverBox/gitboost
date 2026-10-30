@@ -160,11 +160,11 @@ npm ci
 npm run build:windows
 ```
 
-### BLA 实验构建
+### BLA 构建
 
-GitHub Actions 的 **BLA macOS experiment** workflow 会在 `main` 上相关代码变更时自动运行，也可在 Actions 页面通过 **Run workflow** 手动触发。它固定 BLA 源码提交，将数据在链接阶段写入 macOS ARM64 二进制的 `__TEXT,__bla` section，验证数据完整性、严格代码签名以及项目的解析与目录解密测试。
+GitHub Actions 的 **BLA builds** workflow 会在 `main` 上相关代码变更时自动运行，也可在 Actions 页面通过 **Run workflow** 手动触发。它固定 BLA 源码提交，在链接阶段将数据写入 macOS ARM64 的 `__TEXT,__bla` section 和 Windows x64 的只读 `.bla` section，并验证数据完整性及项目的解析与目录解密测试。macOS 额外验证严格代码签名；Windows 额外解包 NSIS/MSI，确认安装包包含已验证的二进制。
 
-成功后可在该次运行的 **Artifacts → GitBoost-bla-macos-arm64** 下载 `.app.zip`、DMG 和 `report.json`，保留 7 天。实验使用 ad hoc 签名，不含 Apple Developer ID 签名或公证，不创建 GitHub Release；正式发布流程保持独立。这些检查验证构建兼容性，不证明对 REA/Ghidra 的防护效果，也不覆盖完整 GUI 与代理功能。
+成功后可在该次运行的 **Artifacts → GitBoost-bla-macos-arm64 / GitBoost-bla-windows-x64** 下载安装包和 `report.json`，保留 7 天。版本 tag 触发的正式发布也使用同一构建与验证脚本，生成 Draft Release。macOS 使用 ad hoc 签名，不含 Apple Developer ID 签名或公证；Windows 未配置 Authenticode 签名。这些检查验证构建兼容性，不证明对 REA/Ghidra 的防护效果，也不覆盖完整 GUI 与代理功能。
 
 ### 版本管理与发布
 
