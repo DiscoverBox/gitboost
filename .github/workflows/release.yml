@@ -23,6 +23,7 @@ jobs:
     env:
       BLA_WORK_DIR: ${{ github.workspace }}/.bla-experiment
       APPLE_SIGNING_IDENTITY: "-"
+      TAURI_ENV_PLATFORM: ${{ matrix.platform == 'windows-latest' && 'windows' || 'macos' }}
 
     steps:
       - name: Checkout
