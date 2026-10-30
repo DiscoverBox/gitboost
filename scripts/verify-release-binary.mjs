@@ -76,18 +76,42 @@ export function inspectReleaseBinary(bytes) {
   assert.ok(optionalSize >= 168 && optional + optionalSize <= bytes.length, "PE optional header 不完整");
   assert.equal(bytes.readUInt16LE(optional), 0x20b, "预期 PE32+");
   assert.ok(bytes.readUInt32LE(optional + 108) > 6, "PE data directories 不完整");
-  assert.equal(bytes.readBigUInt64LE(optional + 112 + 6 * 8), 0n,
-    "发布二进制保留了 PE debug directory / PDB 信息");
+  const debugRva = bytes.readUInt32LE(optional + 112 + 6 * 8);
+  const debugSize = bytes.readUInt32LE(optional + 112 + 6 * 8 + 4);
   const sections = bytes.readUInt16LE(pe + 6);
   const table = optional + optionalSize;
   assert.ok(table + sections * 40 <= bytes.length, "PE section table 越界");
+  let debugOffset;
   for (let i = 0; i < sections; i++) {
     const start = table + i * 40;
     const name = bytes.toString("ascii", start, start + 8).replace(/\0.*$/, "");
     assert.notEqual(name, ".bla", "正式构建不应包含 BLA 数据");
     assert.ok(!name.startsWith(".debug"), "发布二进制保留了调试 section");
+    const address = bytes.readUInt32LE(start + 12);
+    const rawSize = bytes.readUInt32LE(start + 16);
+    if (debugRva >= address && debugRva - address + debugSize <= rawSize) {
+      debugOffset = bytes.readUInt32LE(start + 20) + debugRva - address;
+    }
   }
-  return { format: "PE x64", bytes: bytes.length, coffSymbols: 0, debugDirectory: false, stripped: true, bla: false };
+  const debugTypes = [];
+  if (debugSize) {
+    assert.ok(debugRva && debugSize % 28 === 0 && debugOffset !== undefined
+      && debugOffset + debugSize <= bytes.length, "PE debug directory 越界或不完整");
+    for (let offset = debugOffset; offset < debugOffset + debugSize; offset += 28) {
+      const type = bytes.readUInt32LE(offset + 12);
+      // VC feature counts, POGO section groups, reproducible-build hashes and
+      // security flags are linker metadata. COFF/CodeView symbol records are not allowed.
+      assert.ok([12, 13, 16, 20].includes(type),
+        `发布二进制保留了调试符号 / CodeView PDB 引用（type=${type}）`);
+      const size = bytes.readUInt32LE(offset + 16);
+      const pointer = bytes.readUInt32LE(offset + 24);
+      assert.ok(pointer + size <= bytes.length, "PE debug data 越界");
+      debugTypes.push(type);
+    }
+  } else {
+    assert.equal(debugRva, 0, "PE debug directory 长度无效");
+  }
+  return { format: "PE x64", bytes: bytes.length, coffSymbols: 0, pdbReference: false, debugTypes, stripped: true, bla: false };
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -15,6 +15,32 @@ test("rejects unsupported and truncated release binaries", () => {
   assert.throws(() => inspectReleaseBinary(bytes), /PE header 越界/);
 });
 
+test("accepts PE linker metadata but rejects CodeView symbols and invalid directory bounds", () => {
+  const bytes = Buffer.alloc(1024);
+  bytes.write("MZ");
+  bytes.writeUInt32LE(64, 60);
+  bytes.writeUInt32LE(0x4550, 64);
+  bytes.writeUInt16LE(0x8664, 68);
+  bytes.writeUInt16LE(1, 70);
+  bytes.writeUInt16LE(240, 84);
+  bytes.writeUInt16LE(0x20b, 88);
+  bytes.writeUInt32LE(16, 88 + 108);
+  bytes.writeUInt32LE(0x1000, 88 + 160);
+  bytes.writeUInt32LE(28, 88 + 164);
+  bytes.write(".rdata", 328);
+  bytes.writeUInt32LE(0x1000, 328 + 12);
+  bytes.writeUInt32LE(512, 328 + 16);
+  bytes.writeUInt32LE(512, 328 + 20);
+  for (const type of [12, 13, 16, 20]) {
+    bytes.writeUInt32LE(type, 512 + 12);
+    assert.deepEqual(inspectReleaseBinary(bytes).debugTypes, [type]);
+  }
+  bytes.writeUInt32LE(2, 512 + 12);
+  assert.throws(() => inspectReleaseBinary(bytes), /CodeView PDB/);
+  bytes.writeUInt32LE(0x5000, 88 + 160);
+  assert.throws(() => inspectReleaseBinary(bytes), /越界/);
+});
+
 test("checks actual native Rust executables and detects disabled stripping and BLA", {
   skip: !((process.platform === "darwin" && process.arch === "arm64")
     || (process.platform === "win32" && process.arch === "x64")),
@@ -32,7 +58,7 @@ test("checks actual native Rust executables and detects disabled stripping and B
   };
   assert.equal(inspectReleaseBinary(compile("symbols")).stripped, true);
   assert.match(execFileSync(executable, { encoding: "utf8" }), /release fixture OK/);
-  // MSVC release builds ordinarily omit debug info already; request it to test rejection.
+  // Request debug info to test rejection on both native toolchains.
   assert.throws(() => inspectReleaseBinary(compile("none", ["-g"])), /未剥离|调试|debug directory/);
   const payload = path.join(directory, "payload.bin");
   writeFileSync(payload, "BLA fixture");
