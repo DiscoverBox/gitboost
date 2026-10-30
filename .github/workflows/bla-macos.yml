@@ -1,0 +1,104 @@
+name: BLA macOS experiment
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/bla-macos.yml"
+      - "scripts/bla-macos*"
+      - "scripts/tauri-with-macos-helper.mjs"
+      - "scripts/open-gitboost.command"
+      - "src/**"
+      - "src-tauri/**"
+      - "package*.json"
+      - "vite.config.ts"
+      - "tsconfig*.json"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      BLA_WORK_DIR: ${{ github.workspace }}/.bla-experiment
+      APPLE_SIGNING_IDENTITY: "-"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Checkout pinned BLA source
+        uses: actions/checkout@v4
+        with:
+          repository: qybaihe/bla
+          ref: b2d643600774d62e562081129e55b13b0d9e8a80
+          path: .bla-tool
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Install project dependencies
+        run: npm ci
+
+      - name: Build BLA from its lockfile
+        working-directory: .bla-tool
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+
+      - name: Test scripts and build frontend
+        run: |
+          npm run test:scripts
+          npm test
+          npm run build
+
+      - name: Generate BLA section data
+        run: node scripts/bla-macos.mjs prepare .bla-tool "$BLA_WORK_DIR"
+
+      - name: Link BLA section into the application
+        run: |
+          cargo rustc --release --locked --bin GitBoost \
+            --target aarch64-apple-darwin --features tauri/custom-protocol \
+            --manifest-path src-tauri/Cargo.toml -- \
+            -C "link-arg=-Wl,-sectcreate,__TEXT,__bla,$BLA_WORK_DIR/payload.bin"
+
+      - name: Link BLA section into project runtime tests
+        run: |
+          cargo rustc --profile bench --locked --lib \
+            --target aarch64-apple-darwin --features tauri/custom-protocol \
+            --manifest-path src-tauri/Cargo.toml --message-format=json -- \
+            -C "link-arg=-Wl,-sectcreate,__TEXT,__bla,$BLA_WORK_DIR/payload.bin" \
+            > "$BLA_WORK_DIR/test-build.jsonl"
+
+      - name: Bundle and verify experimental artifacts
+        run: |
+          npm run tauri -- bundle --target aarch64-apple-darwin --features tauri/custom-protocol --bundles app dmg --ci
+          node --input-type=module -e 'import { addHelperToDmg } from "./scripts/tauri-with-macos-helper.mjs"; await addHelperToDmg({buildArgs: ["--target", "aarch64-apple-darwin"]});'
+          app_path="$GITHUB_WORKSPACE/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/GitBoost.app"
+          node scripts/bla-macos.mjs verify "$BLA_WORK_DIR/payload.bin" "$app_path" \
+            "$BLA_WORK_DIR/test-build.jsonl" "$BLA_WORK_DIR/report.json"
+          ditto -c -k --sequesterRsrc --keepParent "$app_path" "$BLA_WORK_DIR/GitBoost-bla-arm64.app.zip"
+          cp src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg "$BLA_WORK_DIR/"
+          hdiutil verify "$BLA_WORK_DIR/"*.dmg
+
+      - name: Upload verified experimental build
+        uses: actions/upload-artifact@v4
+        with:
+          name: GitBoost-bla-macos-arm64
+          if-no-files-found: error
+          include-hidden-files: true
+          retention-days: 7
+          path: |
+            .bla-experiment/GitBoost-bla-arm64.app.zip
+            .bla-experiment/*.dmg
+            .bla-experiment/report.json
