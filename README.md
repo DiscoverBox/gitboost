@@ -168,6 +168,8 @@ GitHub Actions 的 **Native builds** workflow 在 `main` 上相关代码变更�
 
 BLA 注入脚本 `scripts/bla-native.mjs` 仅保留为手动实验工具，不再参与自动构建或正式发布；原因和实测范围见[三样本反编译对照](docs/protection-audit.md)。发布产物检查会拒绝包含 BLA section 的文件。macOS 使用 ad hoc 签名，不含 Apple Developer ID 签名或公证；Windows 未配置 Authenticode 签名。上述检查不覆盖完整 GUI 与代理功能。
 
+另有独立的[单函数 LLVM 混淆实验](docs/ollvm-audit.md)：使用免费开源 LLVM pass 变换一个真实业务函数，记录 Mac/Windows 对照结果、功能验证和复现步骤。它未接入普通构建或正式发布，不能视为已经获得强逆向保护。
+
 ### 版本管理与发布
 
 `package.json` 是应用版本的唯一来源。设置开发版本：

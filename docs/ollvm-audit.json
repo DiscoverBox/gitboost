@@ -1,0 +1,336 @@
+{
+  "date": "2026-10-30",
+  "sourceRevision": "62a9dd3df2ce6fb51757d7d5b1ba7eed84092704",
+  "scope": "One selected existing parser function; no runtime logic changes, no production integration",
+  "targetFunction": "gitboost_lib::importer::normalize_repository_url",
+  "passes": [
+    "bogus control flow",
+    "instruction substitution"
+  ],
+  "upstream": "https://github.com/eshard/obfuscator-llvm/tree/ad26aa21b90cc5c5118d32114b674d1455f54168",
+  "scopeCheck": {
+    "definedFunctions": 6164,
+    "changedFunctions": [
+      "_RNvNtCs8YLxoI8TN8H_12gitboost_lib8importer24normalize_repository_url"
+    ],
+    "verified": true,
+    "method": "same LLVM opt serialization, default pipeline absent; compare every complete function definition"
+  },
+  "macBuild": {
+    "upstream": "eshard/obfuscator-llvm",
+    "upstreamCommit": "ad26aa21b90cc5c5118d32114b674d1455f54168",
+    "archiveSha256": "e4854a587087f7377e9636f7750b392fc839207d2ab6d064493aaf4d0a0dcab1",
+    "llvm": "22.1.8",
+    "rust": "rustc 1.97.1 (8bab26f4f 2026-07-14) (Homebrew)\nbinary: rustc\ncommit-hash: 8bab26f4f68e0e26f0bb7960be334d5b520ea452\ncommit-date: 2026-07-14\nhost: aarch64-apple-darwin\nrelease: 1.97.1\nLLVM version: 22.1.8",
+    "pluginSha256": "485da72585d3c3d012c8fac186b49bef94832299d4566fe7e8dcf01cc62d4a5a",
+    "target": "aarch64-apple-darwin",
+    "sourceRevision": "b5867341849506df615896474706716e4ae25a68",
+    "importerSha256": "a3424f6d768ed75cd7b909bfae30d2ffa81b6490ca4b16f11f3f846d3d3a4883",
+    "pluginSourceSha256": "6699d268fd98434875fe760f89d2df9d31b9a566782b7c94cb06ce426271478a",
+    "patchSha256": "0b228b39e2ae4cfe611b28215c9e90a4fbfbb0bce2daaf0673b32faeeae594fa",
+    "targetFunction": "gitboost_lib::importer::normalize_repository_url",
+    "codegenUnits": 1,
+    "panicStrategy": "unchanged (unwind)",
+    "appStrictSignatureVerified": true,
+    "appNative": {
+      "format": "Mach-O ARM64",
+      "bytes": 10698352,
+      "definedSymbols": 1,
+      "stripped": true,
+      "bla": false
+    },
+    "appSha256": "6e62fe3236e773bbcf9aef0f60bfe47bee1407abbb8543bf330f3d7734a61f1e",
+    "appSectionsMatchProtectedBinary": true,
+    "variants": [
+      {
+        "variant": "baseline",
+        "format": "Mach-O ARM64",
+        "bytes": 10742672,
+        "definedSymbols": 1,
+        "stripped": true,
+        "bla": false,
+        "sha256": "4b58719bd5ed32cfa79f0989dfead84c000a403b313431852031aefd5f9ca5c0",
+        "transforms": [],
+        "tests": "test result: ok. 96 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 13.20s",
+        "signature": "strict ad hoc verification passed"
+      },
+      {
+        "variant": "obfuscated",
+        "format": "Mach-O ARM64",
+        "bytes": 10742688,
+        "definedSymbols": 1,
+        "stripped": true,
+        "bla": false,
+        "sha256": "07eee616794fd350f65381ab1e9490a3ddcae1f5e0c1979e1fbd0338716c28a7",
+        "transforms": [
+          "GITBOOST_OLLVM transformed _RNvNtCs1wo3ikfwUd5_12gitboost_lib8importer24normalize_repository_url blocks=87->147"
+        ],
+        "tests": "test result: ok. 96 passed; 0 failed; 5 ignored; 0 measured; 0 filtered out; finished in 12.96s",
+        "signature": "strict ad hoc verification passed"
+      }
+    ],
+    "notEvaluated": [
+      "Windows protection",
+      "reverse-engineering resistance (run the separate Ghidra audit)",
+      "full GUI/proxy integration"
+    ]
+  },
+  "windowsBuild": {
+    "sourceRevision": "62a9dd3",
+    "rust": "Homebrew 1.97.1 / LLVM 22.1.8",
+    "target": "x86_64-pc-windows-msvc",
+    "panicStrategy": "unchanged (unwind)",
+    "crossCompiler": "cargo-xwin 0.23.1",
+    "standardLibrary": "rebuilt from official rust-src 1.97.1 with the same Homebrew compiler",
+    "pluginSha256": "485da72585d3c3d012c8fac186b49bef94832299d4566fe7e8dcf01cc62d4a5a",
+    "variants": [
+      {
+        "variant": "baseline",
+        "GitBoost.exe": {
+          "bytes": 15124992,
+          "sha256": "eb8177b6da474806a4bf80bfc12d9a3de3ba223effe80bc5045a9c107925adbf"
+        },
+        "gitboost-tests.exe": {
+          "bytes": 4410368,
+          "sha256": "e20db1a5109059d4a5ea10c1b26d02910b0b9ff759bfd6935525e6410147fb75"
+        },
+        "transforms": []
+      },
+      {
+        "variant": "obfuscated",
+        "GitBoost.exe": {
+          "bytes": 15126016,
+          "sha256": "629906b0644cdeb8525fd370628c5a2e4de3b189096cf42a79aa139cd853ea8a"
+        },
+        "gitboost-tests.exe": {
+          "bytes": 4411392,
+          "sha256": "ef0e63b9612a384d2cc2766ec5985023a0fc8fba4555cee0774d5c5057dc21cc"
+        },
+        "transforms": [
+          "GITBOOST_OLLVM transformed _RNvNtCsgdtfH2yfu1F_12gitboost_lib8importer24normalize_repository_url blocks=82->133"
+        ]
+      }
+    ]
+  },
+  "ghidra": {
+    "version": "11.4.3",
+    "java": "Microsoft OpenJDK 21.0.10 ARM64",
+    "heap": "2G",
+    "maxCpu": 4,
+    "analysisTimeoutPerFileSeconds": 600,
+    "decompileTimeoutSeconds": 60,
+    "disabledAnalyzers": [
+      "Decompiler Switch Analysis",
+      "Non-Returning Functions - Discovered"
+    ],
+    "method": "Known error-string UTF-8 bytes -> data references (up to two hops) -> containing function -> decompile",
+    "blind": false,
+    "macWarnings": [
+      "VarnodeContext out of address spaces",
+      "overlapping function/instruction warnings"
+    ],
+    "allFourAnalysesSucceeded": true,
+    "targetCWarningsForAllSamples": [
+      "Type propagation algorithm not settling",
+      "Globals starting with _ overlap smaller symbols at the same address"
+    ]
+  },
+  "samples": [
+    {
+      "platform": "macos-arm64",
+      "variant": "baseline",
+      "bytes": 10742672,
+      "sha256": "4b58719bd5ed32cfa79f0989dfead84c000a403b313431852031aefd5f9ca5c0",
+      "ghidra": {
+        "input": "/private/tmp/gitboost-ollvm-verified/baseline/GitBoost",
+        "anchor": "仓库地址必须是 github.com/owner/repository",
+        "anchors": [
+          "10074a4a1"
+        ],
+        "functions": [
+          {
+            "address": "1003beea0",
+            "name": "FUN_1003beea0",
+            "blocks": 70,
+            "edges": 154,
+            "decompiled": true,
+            "error": "",
+            "decompilerChars": 13802
+          }
+        ]
+      },
+      "execution": {
+        "variant": "baseline",
+        "returncode": 0,
+        "wallSeconds": 493.44354562500666
+      },
+      "decompiledCSha256": "816e7b8eb860f87e61e18a3bb0dc9d00a787e61564b2e5800bb9b5cde464c083"
+    },
+    {
+      "platform": "macos-arm64",
+      "variant": "obfuscated",
+      "bytes": 10742688,
+      "sha256": "07eee616794fd350f65381ab1e9490a3ddcae1f5e0c1979e1fbd0338716c28a7",
+      "ghidra": {
+        "input": "/private/tmp/gitboost-ollvm-verified/obfuscated/GitBoost",
+        "anchor": "仓库地址必须是 github.com/owner/repository",
+        "anchors": [
+          "1007dede1"
+        ],
+        "functions": [
+          {
+            "address": "1003beca0",
+            "name": "FUN_1003beca0",
+            "blocks": 134,
+            "edges": 268,
+            "decompiled": true,
+            "error": "",
+            "decompilerChars": 22694
+          }
+        ]
+      },
+      "execution": {
+        "variant": "obfuscated",
+        "returncode": 0,
+        "wallSeconds": 495.60603658300533
+      },
+      "decompiledCSha256": "174b833091132142607cf50c7409549368de109650fe73e2b93f70aec339e1c1"
+    },
+    {
+      "platform": "windows-x64",
+      "variant": "baseline",
+      "bytes": 15124992,
+      "sha256": "eb8177b6da474806a4bf80bfc12d9a3de3ba223effe80bc5045a9c107925adbf",
+      "ghidra": {
+        "input": "/private/tmp/gitboost-ollvm-windows/baseline/GitBoost.exe",
+        "anchor": "仓库地址必须是 github.com/owner/repository",
+        "anchors": [
+          "140ab99a8"
+        ],
+        "functions": [
+          {
+            "address": "1406aaa20",
+            "name": "FUN_1406aaa20",
+            "blocks": 62,
+            "edges": 131,
+            "decompiled": true,
+            "error": "",
+            "decompilerChars": 13153
+          }
+        ]
+      },
+      "execution": {
+        "variant": "baseline",
+        "returncode": 0,
+        "wallSeconds": 378.9596499999898
+      },
+      "decompiledCSha256": "dcbd710dd04ade9f279b0defd75ee1a8cc8acefaff47d96290d67ffefd598438"
+    },
+    {
+      "platform": "windows-x64",
+      "variant": "obfuscated",
+      "bytes": 15126016,
+      "sha256": "629906b0644cdeb8525fd370628c5a2e4de3b189096cf42a79aa139cd853ea8a",
+      "ghidra": {
+        "input": "/private/tmp/gitboost-ollvm-windows/obfuscated/GitBoost.exe",
+        "anchor": "仓库地址必须是 github.com/owner/repository",
+        "anchors": [
+          "140ab9998"
+        ],
+        "functions": [
+          {
+            "address": "1406aa8c0",
+            "name": "FUN_1406aa8c0",
+            "blocks": 112,
+            "edges": 219,
+            "decompiled": true,
+            "error": "",
+            "decompilerChars": 17648
+          }
+        ]
+      },
+      "execution": {
+        "variant": "obfuscated",
+        "returncode": 0,
+        "wallSeconds": 378.9386754169973
+      },
+      "decompiledCSha256": "0a2f21126e4ed1132f007decbb91d2a86b65b0ebff240227bcefcd1b874b8c12"
+    }
+  ],
+  "limitations": [
+    "Ghidra decompiles all four samples and still locates the function using the same string",
+    "No blind analyst timing or deobfuscation evaluation",
+    "Known OLLVM opaque predicates can be simplified",
+    "No VM virtualization, string encryption, key protection, GUI integration, or protected Windows installer validation",
+    "Only parser selected; other business functions remain untransformed",
+    "Source repository is public"
+  ],
+  "windowsNativeValidation": {
+    "workflow": "https://github.com/DiscoverBox/gitboost/actions/runs/41074750441",
+    "workflowRevision": "9420c6b",
+    "conclusion": "success",
+    "archiveSha256": "f999d49c4f8814448ecb6e3678e76f6156229db0e5b1ef4b4ae6dcd12998fa9e",
+    "downloadHashCheckedBeforeExecution": true,
+    "baseline": "test result: ok. 92 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 35.87s",
+    "obfuscated": "test result: ok. 92 passed; 0 failed; 4 ignored; 0 measured; 0 filtered out; finished in 50.38s",
+    "parserBoundaryTestPassedForBoth": true,
+    "nativeApplicationAndTestBinaryChecksPassedForBoth": true,
+    "protectedInstallerEvaluated": false,
+    "guiEvaluated": false,
+    "repositoryTokenPermissions": "contents:read",
+    "artifact": {
+      "id": 12987011918,
+      "name": "GitBoost-ollvm-windows-experiment",
+      "archiveBytes": 13492345,
+      "sha256": "74de22fe5ef047c62a1609be2a8e67c7c84b7edc541975be1f3b5e33f7a1b837",
+      "retentionDays": 7
+    },
+    "downloadedArtifactBinariesMatchLocalBuildSha256": true,
+    "temporaryDraftDeleted": true,
+    "nativeChecks": {
+      "baseline": {
+        "application": {
+          "format": "PE x64",
+          "bytes": 15124992,
+          "coffSymbols": 0,
+          "pdbReference": false,
+          "debugTypes": [],
+          "stripped": true,
+          "bla": false
+        },
+        "testExecutable": {
+          "format": "PE x64",
+          "bytes": 4410368,
+          "coffSymbols": 0,
+          "pdbReference": false,
+          "debugTypes": [],
+          "stripped": true,
+          "bla": false
+        },
+        "testsLogSha256": "c57f74b4c448e94a5e22c4b43d241fd9653629fa5c307b74e0c2f001fa605962"
+      },
+      "obfuscated": {
+        "application": {
+          "format": "PE x64",
+          "bytes": 15126016,
+          "coffSymbols": 0,
+          "pdbReference": false,
+          "debugTypes": [],
+          "stripped": true,
+          "bla": false
+        },
+        "testExecutable": {
+          "format": "PE x64",
+          "bytes": 4411392,
+          "coffSymbols": 0,
+          "pdbReference": false,
+          "debugTypes": [],
+          "stripped": true,
+          "bla": false
+        },
+        "testsLogSha256": "49a1f45f1246a15640f87868be50a1ba09990672d73f0bd8076a7aa6132874cd"
+      }
+    }
+  },
+  "macBuildReportScope": "Unmodified Mac-only builder output; its notEvaluated list describes that script, not this later combined audit."
+}
