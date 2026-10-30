@@ -179,4 +179,45 @@ mod tests {
         assert!(normalize_repository_url("git@github.com:anthropics/skills.git").is_err());
         assert!(normalize_repository_url("other.example/anthropics/skills.git").is_err());
     }
+
+    #[test]
+    fn repository_parser_preserves_boundary_behavior_through_function_pointer() {
+        // Call the emitted function even in optimized builds used by the LLVM experiment.
+        let parse =
+            std::hint::black_box(normalize_repository_url as fn(&str) -> Result<String, String>);
+        for number in 0..256 {
+            let repository = format!("org-{number}/repo_{number}");
+            let expected = format!("https://github.com/{repository}.git");
+            for prefix in ["", "github.com/", "https://github.com/"] {
+                for suffix in ["", ".git", "/"] {
+                    let input = format!("  {prefix}{repository}{suffix}  ");
+                    assert_eq!(parse(&input).unwrap(), expected, "{input}");
+                }
+            }
+        }
+        assert_eq!(
+            parse("https://github.com:443/owner/repo.name").unwrap(),
+            "https://github.com/owner/repo.name.git"
+        );
+        for input in [
+            "",
+            "   ",
+            "\0",
+            "owner",
+            "owner/repo/extra",
+            "owner/",
+            "http://github.com/owner/repo",
+            "https://other.example/owner/repo",
+            "https://github.com:8443/owner/repo",
+            "https://user:token@github.com/owner/repo",
+            "https://github.com/owner/repo?token=x",
+            "https://github.com/owner/repo#fragment",
+            "https://github.com/所有者/repo",
+            "https://github.com/owner/re po",
+            "ssh://git@github.com/owner/repo",
+            "git@github.com:owner/repo.git",
+        ] {
+            assert!(parse(input).is_err(), "unexpectedly accepted {input:?}");
+        }
+    }
 }

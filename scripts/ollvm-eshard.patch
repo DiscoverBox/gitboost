@@ -1,0 +1,60 @@
+--- a/bogus/BogusControlFlow.cpp
++++ b/bogus/BogusControlFlow.cpp
+@@ -147,7 +147,7 @@
+   // If fla annotations
+   if (toObfuscate(flag, &F, "bcf")) {
+     bogus(F);
+-    doF(*F.getParent());
++    doF(*F.getParent(), F);
+     return true;
+   }
+ 
+@@ -570,7 +570,7 @@
+  * More precisely, the condition which predicate is FCMP_TRUE.
+  * It also remove all the functions' basic blocks' and instructions' names.
+  */
+-bool BogusControlFlow::doF(Module &M) {
++bool BogusControlFlow::doF(Module &M, Function &selected) {
+   // In this part we extract all always-true predicate and replace them with
+   // opaque predicate: For this, we declare two global values: x and y, and
+   // replace the FCMP_TRUE predicate with (y < 10 || x * (x + 1) % 2 == 0) A
+@@ -587,10 +587,10 @@
+ 
+   GlobalVariable *x =
+       new GlobalVariable(M, Type::getInt32Ty(M.getContext()), false,
+-                         GlobalValue::CommonLinkage, (Constant *)x1, *varX);
++                         GlobalValue::PrivateLinkage, (Constant *)x1, *varX);
+   GlobalVariable *y =
+       new GlobalVariable(M, Type::getInt32Ty(M.getContext()), false,
+-                         GlobalValue::CommonLinkage, (Constant *)y1, *varY);
++                         GlobalValue::PrivateLinkage, (Constant *)y1, *varY);
+ 
+   std::vector<Instruction *> toEdit, toDelete;
+   BinaryOperator *op, *op1 = NULL;
+@@ -598,12 +598,14 @@
+   ICmpInst *condition, *condition2;
+   // Looking for the conditions and branches to transform
+   for (Module::iterator mi = M.begin(), me = M.end(); mi != me; ++mi) {
++    if (&*mi != &selected) continue;
+     for (Function::iterator fi = mi->begin(), fe = mi->end(); fi != fe; ++fi) {
+       // fi->setName("");
+       Instruction *tbb = fi->getTerminator();
+       if (auto *br = dyn_cast<BranchInst>(tbb)) {
+         if (br->isConditional()) {
+-          FCmpInst *cond = (FCmpInst *)br->getCondition();
++          auto *cond = dyn_cast<FCmpInst>(br->getCondition());
++          if (!cond) continue;
+           unsigned opcode = cond->getOpcode();
+           if (opcode == Instruction::FCmp) {
+             if (cond->getPredicate() == FCmpInst::FCMP_TRUE) {
+--- a/bogus/BogusControlFlow.h
++++ b/bogus/BogusControlFlow.h
+@@ -71,7 +71,7 @@
+    * More precisely, the condition which predicate is FCMP_TRUE.
+    * It also remove all the functions' basic blocks' and instructions' names.
+    */
+-  bool doF(Module &M);
++  bool doF(Module &M, Function &selected);
+ };
+ 
+ struct LegacyBogusControlFlow : public FunctionPass, public BogusControlFlow {
