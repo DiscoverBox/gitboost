@@ -57,10 +57,11 @@ jobs:
       - name: Install project dependencies
         run: npm ci
 
-      - name: Test scripts and frontend
-        run: |
-          npm run test:scripts
-          npm test
+      - name: Test scripts
+        run: npm run test:scripts
+
+      - name: Test frontend
+        run: npm test
 
       - name: Run Rust tests
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml

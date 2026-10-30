@@ -162,7 +162,7 @@ npm run build:windows
 
 ### Release 二进制检查
 
-macOS 和 Windows 的 release profile 均设置 `strip = "symbols"`。自动构建会检查实际二进制：macOS 仅保留必要的 Mach-O header 符号，Windows 不得携带 COFF 符号表、debug directory 或 PDB 引用。运行必需的动态导入仍会保留。去符号只能减少元数据暴露，不会混淆业务代码、隐藏内嵌密钥或阻止反编译。
+macOS 和 Windows 的 release profile 均设置 `strip = "symbols"`；Windows MSVC 的 release 可执行文件额外传入 `/DEBUG:NONE`，避免链接器继续生成 PDB 引用。自动构建会检查实际二进制：macOS 仅保留必要的 Mach-O header 符号，Windows 不得携带 COFF 符号表、debug directory 或 PDB 引用。运行必需的动态导入仍会保留。去符号只能减少元数据暴露，不会混淆业务代码、隐藏内嵌密钥或阻止反编译。
 
 GitHub Actions 的 **Native builds** workflow 在 `main` 上相关代码变更时运行，也支持手动触发。通过测试、安装包构建及二进制检查后，可从 **Artifacts → GitBoost-macos-arm64 / GitBoost-windows-x64** 下载安装包和 `native-report.json`，保留 7 天。macOS 额外检查 app 严格签名与 DMG 完整性。正式发布仍生成 Draft Release，检查通过后再发布。
 

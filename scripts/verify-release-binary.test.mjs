@@ -25,7 +25,9 @@ test("checks actual native Rust executables and detects disabled stripping and B
   const executable = path.join(directory, process.platform === "win32" ? "probe.exe" : "probe");
   writeFileSync(source, 'fn main() { println!("release fixture OK"); }\n');
   const compile = (strip, extra = []) => {
-    execFileSync("rustc", ["--edition=2021", "-O", "-C", `strip=${strip}`, source, "-o", executable, ...extra]);
+    const link = process.platform === "win32" && strip === "symbols"
+      ? ["-C", "link-arg=/DEBUG:NONE"] : [];
+    execFileSync("rustc", ["--edition=2021", "-O", "-C", `strip=${strip}`, source, "-o", executable, ...link, ...extra]);
     return readFileSync(executable);
   };
   assert.equal(inspectReleaseBinary(compile("symbols")).stripped, true);
