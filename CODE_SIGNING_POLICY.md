@@ -1,10 +1,6 @@
 # Code signing policy
 
-Status: application to SignPath Foundation pending.
-
-GitBoost is applying for the SignPath Foundation open-source code-signing program. Until onboarding is complete, Windows downloads remain unsigned unless their Authenticode signature verifies successfully.
-
-Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+Windows downloads must be treated as unsigned unless their Authenticode signature verifies successfully.
 
 ## Signing scope
 
@@ -23,15 +19,15 @@ Historical releases may be unsigned. A release must not be described as signed u
 - Authors, committers, and reviewers: [DiscoverBox organization members](https://github.com/orgs/DiscoverBox/people). Trusted members may commit project-owned source and build scripts; external contributions require maintainer review before merge.
 - Signing approvers: [DiscoverBox organization owners](https://github.com/orgs/DiscoverBox/people?query=role%3Aowner).
 
-All maintainers and signing approvers must use multi-factor authentication for GitHub and SignPath. Every release signing request requires manual approval by a signing approver.
+All maintainers and signing approvers must use multi-factor authentication for GitHub and any code-signing service. Every release signing request requires manual approval by a signing approver.
 
 ## Trusted source, build, and release process
 
 1. The only trusted source is a version tag in the public `DiscoverBox/gitboost` repository.
 2. The version-controlled [GitHub Actions release workflow](https://github.com/DiscoverBox/gitboost/blob/main/.github/workflows/release.yml) runs tests and builds Windows artifacts from that tagged commit on GitHub-hosted runners.
 3. Product metadata must identify the application as `GitBoost`, and the artifact version must match the release tag and the version in `package.json`.
-4. After SignPath onboarding, only artifacts produced by that workflow may be submitted through the configured SignPath signing policy. Each request must remain traceable to its commit, tag, workflow run, and artifact.
-5. Signed artifacts are published on [GitHub Releases](https://github.com/DiscoverBox/gitboost/releases). Signing credentials and private keys must never be committed to the repository.
+4. If code signing is enabled, only artifacts produced by that workflow may be submitted for signing. Each request must remain traceable to its commit, tag, workflow run, and artifact.
+5. Any signed artifacts must be published on [GitHub Releases](https://github.com/DiscoverBox/gitboost/releases). Signing credentials and private keys must never be committed to the repository.
 
 ## Privacy policy
 
@@ -49,4 +45,4 @@ These services receive normal connection metadata according to their own privacy
 
 ## Verification and incident response
 
-Users should download GitBoost only from the project's GitHub Releases page and verify that any release advertised as signed has a valid Authenticode signature. If the repository, build workflow, or signing account is suspected to be compromised, maintainers will stop signing and publishing affected artifacts, investigate the incident, and work with SignPath Foundation on certificate revocation when required.
+Users should download GitBoost only from the project's GitHub Releases page and verify that any release advertised as signed has a valid Authenticode signature. If the repository, build workflow, or signing account is suspected to be compromised, maintainers will stop signing and publishing affected artifacts, investigate the incident, and work with the relevant certificate provider on certificate revocation when required.

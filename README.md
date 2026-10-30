@@ -110,9 +110,7 @@ macOS 和 Windows 使用相同的本机地址。工具参数示例：
 
 ### Code signing policy
 
-GitBoost 正在申请 SignPath Foundation 的开源代码签名服务。申请和接入完成前，Windows 安装包仍按未签名软件处理；只有 Windows 显示 Authenticode 签名有效的发布包才可视为已签名。
-
-Free code signing provided by SignPath.io, certificate by SignPath Foundation.
+Windows 安装包默认按未签名软件处理；只有下载的安装包通过 Windows Authenticode 签名验证，才可视为已签名。可在文件“属性”中的“数字签名”页查看签名并确认其有效，或在 PowerShell 中运行 `Get-AuthenticodeSignature -FilePath <安装包路径>`，确认 `Status` 为 `Valid`。请只从本项目的 [GitHub Releases](https://github.com/DiscoverBox/gitboost/releases) 下载。
 
 签名范围、负责人、可验证构建流程和隐私说明见 [Code signing policy](CODE_SIGNING_POLICY.md)。
 
