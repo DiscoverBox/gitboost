@@ -62,6 +62,16 @@ export function linkerArguments(platform, directory) {
     "-C", "link-arg=/INCLUDE:GITBOOST_BLA_PAYLOAD", "-C", "link-arg=/SECTION:.bla,R"];
 }
 
+export function installerExecutableBytes(original, bundleType) {
+  assert.ok(bundleType === "nsis" || bundleType === "msi", "不支持的 Windows 安装包类型");
+  const marker = Buffer.from("__TAURI_BUNDLE_TYPE_VAR_UNK");
+  const offset = original.indexOf(marker);
+  assert.ok(offset >= 0, "缺少 Tauri 安装包类型标记");
+  const expected = Buffer.from(original);
+  Buffer.from(`__TAURI_BUNDLE_TYPE_VAR_${bundleType === "nsis" ? "NSS" : "MSI"}`).copy(expected, offset);
+  return expected;
+}
+
 export function inspectPeBlaSection(bytes, payload) {
   assert.ok(bytes.length >= 64 && bytes.toString("ascii", 0, 2) === "MZ", "不是完整的 PE 文件");
   const pe = bytes.readUInt32LE(0x3c);
@@ -228,10 +238,12 @@ export async function buildWithBla(args) {
     closeSync(log);
   }
   const cli = path.join(projectRoot, "node_modules", "@tauri-apps", "cli", "tauri.js");
+  const release = path.join(projectRoot, "src-tauri", "target", target, "release");
+  // Tauri patches this one marker separately for each installer format.
+  const unpatchedWindowsExecutable = windows ? readFileSync(path.join(release, "GitBoost.exe")) : null;
   execFileSync(process.execPath, [cli, "bundle", "--target", target, "--features", "tauri/custom-protocol",
     "--bundles", ...(windows ? ["nsis", "msi"] : ["app", "dmg"]), "--ci"],
   { cwd: projectRoot, stdio: "inherit" });
-  const release = path.join(projectRoot, "src-tauri", "target", target, "release");
   if (!windows) await addHelperToDmg({ projectRoot, buildArgs: ["--target", target] });
   const app = windows ? path.join(release, "GitBoost.exe") : path.join(release, "bundle", "macos", "GitBoost.app");
   const reportPath = path.join(directory, "report.json");
@@ -244,6 +256,8 @@ export async function buildWithBla(args) {
       const files = readdirSync(installerDirectory).filter((name) => name.endsWith(extension));
       assert.equal(files.length, 1, `预期一个 ${folder} 安装包`);
       const installer = path.join(installerDirectory, files[0]);
+      const expectedExecutable = installerExecutableBytes(unpatchedWindowsExecutable, folder);
+      const expectedSha256 = sha256(expectedExecutable);
       const extracted = path.join(directory, `extracted-${folder}`);
       execFileSync("7z", ["x", "-y", installer, `-o${extracted}`], { stdio: ["ignore", "pipe", "inherit"] });
       for (const entry of readdirSync(extracted, { recursive: true, withFileTypes: true })) {
@@ -252,14 +266,16 @@ export async function buildWithBla(args) {
             { stdio: ["ignore", "pipe", "inherit"] });
         }
       }
-      const embedded = readdirSync(extracted, { recursive: true, withFileTypes: true }).some((entry) => {
+      const embedded = readdirSync(extracted, { recursive: true, withFileTypes: true }).find((entry) => {
         if (!entry.isFile()) return false;
         const file = path.join(entry.parentPath, entry.name);
-        return statSync(file).size === report.app.bytes && sha256(readFileSync(file)) === report.app.sha256;
+        return statSync(file).size === expectedExecutable.length && sha256(readFileSync(file)) === expectedSha256;
       });
       assert.ok(embedded, `${folder} 安装包未包含已验证的 BLA 二进制`);
+      verifyBlaBinary(path.join(embedded.parentPath, embedded.name), readFileSync(path.join(directory, "payload.bin")));
       copyFileSync(installer, path.join(directory, files[0]));
-      report.installers.push({ name: files[0], sha256: sha256(readFileSync(installer)), embeddedExecutableVerified: true });
+      report.installers.push({ name: files[0], sha256: sha256(readFileSync(installer)),
+        embeddedExecutableSha256: expectedSha256, embeddedExecutableVerified: true });
     }
   } else {
     execFileSync("ditto", ["-c", "-k", "--sequesterRsrc", "--keepParent", app,

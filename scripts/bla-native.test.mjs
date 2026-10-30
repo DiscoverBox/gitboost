@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { inspectBlaSection, inspectPeBlaSection, linkerArguments, verifyBlaBinary } from "./bla-native.mjs";
+import { inspectBlaSection, inspectPeBlaSection, installerExecutableBytes, linkerArguments, verifyBlaBinary } from "./bla-native.mjs";
 
 test("rejects missing and truncated Mach-O headers", () => {
   assert.throws(() => inspectBlaSection(Buffer.alloc(0), Buffer.alloc(0)), /Mach-O/);
@@ -18,6 +18,17 @@ test("rejects invalid PE files and forces the Windows payload to remain linked",
   const args = linkerArguments("win32", "payload");
   assert.ok(args.includes("link-arg=/INCLUDE:GITBOOST_BLA_PAYLOAD"));
   assert.ok(args.includes("link-arg=/SECTION:.bla,R"));
+});
+
+test("allows only Tauri's documented installer-type patch when checking embedded executables", () => {
+  const original = Buffer.from("code-before\0__TAURI_BUNDLE_TYPE_VAR_UNK\0code-after");
+  assert.deepEqual(installerExecutableBytes(original, "nsis"),
+    Buffer.from("code-before\0__TAURI_BUNDLE_TYPE_VAR_NSS\0code-after"));
+  assert.deepEqual(installerExecutableBytes(original, "msi"),
+    Buffer.from("code-before\0__TAURI_BUNDLE_TYPE_VAR_MSI\0code-after"));
+  assert.ok(original.includes(Buffer.from("__TAURI_BUNDLE_TYPE_VAR_UNK")));
+  assert.throws(() => installerExecutableBytes(Buffer.from("missing"), "nsis"), /缺少/);
+  assert.throws(() => installerExecutableBytes(original, "other"), /不支持/);
 });
 
 test("links a real Windows read-only PE section and executes the resulting program", {
